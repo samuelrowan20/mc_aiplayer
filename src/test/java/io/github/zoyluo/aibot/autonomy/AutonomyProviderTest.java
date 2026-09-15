@@ -59,6 +59,7 @@ final class AutonomyProviderTest {
             assertEquals("decide", requestBody.get().getAsJsonObject("tool_choice").getAsJsonObject("function").get("name").getAsString());
             String system = requestBody.get().getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString();
             assertTrue(system.startsWith(AutonomyProvider.DIRECTIVE));
+            assertFalse(system.contains("Action reference"));
             assertFalse(system.contains("GoalPlanner"));
         } finally { server.stop(0); }
     }
@@ -220,6 +221,7 @@ final class AutonomyProviderTest {
                     .getAsJsonObject("name").getAsJsonArray("enum").get(0).getAsString());
             String system = request.get().getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString();
             assertTrue(system.startsWith(AutonomyProvider.DIRECTIVE));
+            assertTrue(system.contains("inspect: Inspect perceptible state arguments={} required=[]"));
             assertTrue(system.contains("Return one JSON decision"));
             assertFalse(system.contains("Use decide once"));
         } finally { server.stop(0); }

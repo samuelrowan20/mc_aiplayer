@@ -97,6 +97,19 @@ public interface AutonomyProvider extends AutoCloseable {
             this.config = config;
             this.budget = budget;
             this.tool = decisionTool(capabilities);
+            StringBuilder reference = new StringBuilder();
+            if (config.decisionFormat().equals("json_schema")) {
+                // Grammar-only backends constrain shape but do not put schema descriptions in the prompt.
+                reference.append("\nAction reference (arguments must obey these types and ranges):\n");
+                for (var value : capabilities) {
+                    JsonObject capability = value.getAsJsonObject();
+                    JsonObject parameters = capability.getAsJsonObject("parameters");
+                    reference.append(capability.get("name").getAsString()).append(": ")
+                            .append(capability.get("description").getAsString()).append(" arguments=")
+                            .append(parameters.get("properties")).append(" required=")
+                            .append(parameters.has("required") ? parameters.get("required") : new JsonArray()).append('\n');
+                }
+            }
             this.prompt = DIRECTIVE + "\nYou choose intentions and priorities; intentions can persist across actions. "
                     + (config.decisionFormat().equals("json_schema")
                         ? "Return one JSON decision matching the supplied response schema to continue, revise, abandon, complete, defer or replace your intention, "
@@ -108,7 +121,7 @@ public interface AutonomyProvider extends AutoCloseable {
                     + "move/navigate change position. All x/y/z arguments are absolute world coordinates. "
                     + "omitted counts indicate withheld entries, not absent objects. working_state holds current intention, "
                     + "latest result, recent events and summarized memory. Update memorySummary concisely, retaining needed memories. "
-                    + "Supply only a concise public purpose, never private reasoning.";
+                    + "Supply only a concise public purpose, never private reasoning." + reference;
             this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         }
 

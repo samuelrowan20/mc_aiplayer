@@ -152,12 +152,13 @@ $env:AIBOT_PROFILE = 'strict_survival'
 
 Ollama can use `http://localhost:11434/v1` with the placeholder key `ollama`. The original `qwen3:4b` returned a valid decision in a local schema-constrained smoke test. Its tool-call responses failed validation in that test, so use the JSON mode introduced in autonomy.2.
 
-For growing observations and memory, create an alias with a larger context window. This reuses the installed weights and original template:
+For the tested 4 GB GPU setup, create an alias with an 8K context and smaller processing batch. This reuses the installed weights and original template:
 
 ```text
-# Save these two lines as Modelfile.aibot
+# Save these lines as Modelfile.aibot
 FROM qwen3:4b
-PARAMETER num_ctx 16384
+PARAMETER num_ctx 8192
+PARAMETER num_batch 128
 ```
 
 ```powershell
@@ -171,7 +172,7 @@ Set the existing `deepseek` section in `config/aibot.json`:
   "baseUrl": "http://localhost:11434/v1",
   "apiKey": "ollama",
   "model": "qwen3:4b-aibot",
-  "maxTokens": 1024
+  "maxTokens": 512
 }
 ```
 
@@ -182,11 +183,13 @@ Set these fields in `config/aibot-autonomy.json`, keeping the other generated fi
   "decisionFormat": "json_schema",
   "reasoningMode": "openai",
   "reasoningEffort": "none",
+  "dailyTokenLimit": 0,
+  "minDecisionTicks": 1,
   "providerTimeoutSeconds": 180
 }
 ```
 
-Here `openai` selects the compatible `reasoning_effort` request field; the endpoint remains local Ollama. Leave Ollama running and restart Minecraft after changing configuration or the jar. Latency depends on local hardware and context size; this smoke test does not establish overnight survival quality. See [Ollama's compatibility documentation](https://docs.ollama.com/api/openai-compatibility) for response formats and model context configuration.
+Here `openai` selects the compatible `reasoning_effort` request field; the endpoint remains local Ollama. JSON-schema mode includes a compact action reference in the prompt because grammar-based servers may not expose schema descriptions to the model. Local mode has no Groq pacing or daily quota. The tested laptop also uses `OLLAMA_KV_CACHE_TYPE=q8_0` and `OLLAMA_FLASH_ATTENTION=1`; these are Ollama-wide environment settings and require an Ollama restart. Leave Ollama running and restart Minecraft after changing configuration or the jar. Latency depends on local hardware and context size; this smoke test does not establish overnight survival quality. See [Ollama's compatibility documentation](https://docs.ollama.com/api/openai-compatibility) for response formats and model context configuration.
 
 ## Groq quota and compact context
 

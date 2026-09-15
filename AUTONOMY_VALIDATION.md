@@ -165,6 +165,14 @@ The provider now releases reservations for explicit Groq rate-limit admission re
 
 The live model chose two consecutive `look` actions while describing a survey of its surroundings. Both completed without translation. The observation implementation samples fixed world directions regardless of facing, so those turns did not expand the observation coverage. The system prompt and inspect/look descriptions now state that observations refresh automatically, look changes only facing, and coordinates are absolute. This change does not select a movement or survival strategy for the model. Provider regression tests and jar packaging are used for this metadata-only change; actual model action selection after the correction remains to be observed in-game.
 
+## Local Qwen integration: autonomy.7 (2026-09-15)
+
+The instance now uses local `qwen3:4b-aibot`, 8,192 context tokens, processing batch 128, thinking disabled, JSON-schema responses, and a 512-token output cap. Ollama uses q8 context cache and Flash Attention. The original model weights/template and Groq budget ledger were preserved. Local decision spacing is one tick after action completion; the local endpoint has no Groq quota or one-minute pacing.
+
+A first grammar-only test produced an invalid movement magnitude. The provider now includes action descriptions, argument types/ranges and required fields in a compact text reference for JSON-schema mode; ordinary tool-call prompts remain unchanged. All 11 provider regression tests passed, including reference visibility. Two final local synthetic decisions parsed successfully: 28,699 ms with 1,065 prompt/131 output tokens, then 10,459 ms with 1,089 prompt/106 output tokens. Both selected navigation coordinates; these were protocol tests and did not prove a traversable Minecraft route. In-game speed and model judgment remain unverified. The model still spans CPU and GPU memory on this laptop.
+
+The remapped jar was installed with matching SHA-256 `6ac717f27aff5cf560dcacd2191c598a4f5b4b92660325a4dd186b919ecda5a0`. No Groq inference tokens were used for this switch.
+
 ## Remaining deterministic choices and limitations
 
 A* costs, hazard exclusions, short-drop limits, steering and collision rules select the motor route to a model-selected destination. These are the closest remaining boundary between mechanics and policy: they can refuse hazardous routes. The model can request separate bounded movement. Recipe matching, screen transactions, reach checks, mining/attack timing, timeouts and retry limits also remain deterministic.
