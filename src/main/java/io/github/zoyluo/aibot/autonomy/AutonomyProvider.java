@@ -103,6 +103,9 @@ public interface AutonomyProvider extends AutoCloseable {
                         : "Use decide once to continue, revise, abandon, complete, defer or replace your intention, ")
                     + "and select exactly one physical action or deliberateWait with a reason and bounded ticks. "
                     + "20 ticks equal one second. Failed actions did not complete. Observations are local and partial; "
+                    + "each decision already includes fresh observations sampled in all directions. "
+                    + "look only changes facing, and inspect only refreshes: neither moves you or expands the sampled view. "
+                    + "move/navigate change position. All x/y/z arguments are absolute world coordinates. "
                     + "omitted counts indicate withheld entries, not absent objects. working_state holds current intention, "
                     + "latest result, recent events and summarized memory. Update memorySummary concisely, retaining needed memories. "
                     + "Supply only a concise public purpose, never private reasoning.";

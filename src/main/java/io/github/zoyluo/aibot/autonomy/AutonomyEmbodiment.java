@@ -50,8 +50,8 @@ public final class AutonomyEmbodiment implements AutonomyEngine.Ports {
         String coordinates = "\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"z\":{\"type\":\"number\"}";
         String blockCoordinates = coordinates.replace("number", "integer");
         String face = ",\"face\":{\"type\":\"string\",\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]}";
-        capability(tools, "inspect", "Refresh neutral visible surroundings, status, inventory and current screen.", "", "");
-        capability(tools, "look", "Turn toward coordinates within 32 blocks.", coordinates, "x,y,z");
+        capability(tools, "inspect", "Refresh observations, which are already refreshed before every decision. No movement or expanded view.", "", "");
+        capability(tools, "look", "Turn facing toward absolute world coordinates within 32 blocks. No movement; all-direction observation sampling is unchanged.", coordinates, "x,y,z");
         capability(tools, "navigate", "Navigate to a visible/remembered cell within 32 blocks. Only observed/known path cells; no digging, placing or teleporting.", blockCoordinates, "x,y,z");
         capability(tools, "move", "Local movement relative to facing, at most 100 ticks. Jump also presses swim-up in fluid.",
                 "\"forward\":{\"type\":\"number\",\"minimum\":-1,\"maximum\":1},\"strafe\":{\"type\":\"number\",\"minimum\":-1,\"maximum\":1},\"sprint\":{\"type\":\"boolean\"},\"jump\":{\"type\":\"boolean\"}", "forward,strafe");

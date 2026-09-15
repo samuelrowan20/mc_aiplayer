@@ -161,6 +161,10 @@ The local guard deferred Bob for nearly 24 hours with 34,842 confirmed tokens an
 
 The provider now releases reservations for explicit Groq rate-limit admission rejections. Malformed errors, unknown error types, and responses containing usage or choices retain their reservations. Explicit stop/start also clears the engine's stale deadline so durable admission can be checked again. All 50 autonomy tests passed, including rejection classification and a restart check proving a still-insufficient budget cannot send HTTP. The remapped jar was installed with matching SHA-256 `2814c8d192fd95b7f66d4c698f5964456203d58252c87f3accde2789e7f76235`. No new live inference was needed for these checks.
 
+## Observation instructions: autonomy.6 (2026-09-15)
+
+The live model chose two consecutive `look` actions while describing a survey of its surroundings. Both completed without translation. The observation implementation samples fixed world directions regardless of facing, so those turns did not expand the observation coverage. The system prompt and inspect/look descriptions now state that observations refresh automatically, look changes only facing, and coordinates are absolute. This change does not select a movement or survival strategy for the model. Provider regression tests and jar packaging are used for this metadata-only change; actual model action selection after the correction remains to be observed in-game.
+
 ## Remaining deterministic choices and limitations
 
 A* costs, hazard exclusions, short-drop limits, steering and collision rules select the motor route to a model-selected destination. These are the closest remaining boundary between mechanics and policy: they can refuse hazardous routes. The model can request separate bounded movement. Recipe matching, screen transactions, reach checks, mining/attack timing, timeouts and retry limits also remain deterministic.
