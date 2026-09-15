@@ -155,6 +155,12 @@ After `.4` pacing, a diagnostic request still returned 429 with `rate_limit_exce
 
 The local configuration and Groq setup instructions now use `maxTokens: 512`. A live synthetic request through the actual provider and shared budget returned a valid inspect decision in 1,540 ms, with 3,178 prompt tokens and 138 completion tokens. The ledger retained prior uncertain reservations. No production Java changed for this correction; Minecraft must restart to load the new configuration. In-game behavior with the corrected allowance still needs verification.
 
+## Rejected-request accounting fix: autonomy.5 (2026-09-15)
+
+The local guard deferred Bob for nearly 24 hours with 34,842 confirmed tokens and 153,749 tokens reserved for unconfirmed outcomes. Eight reservations totaling 109,098 tokens were matched to recorded direct Groq 429 responses and settled as rejected requests. Three unresolved reservations and every confirmed charge were retained, leaving 120,507 tokens available. The original ledger and reconciliation receipt were preserved locally; the 200K limit was not changed.
+
+The provider now releases reservations for explicit Groq rate-limit admission rejections. Malformed errors, unknown error types, and responses containing usage or choices retain their reservations. Explicit stop/start also clears the engine's stale deadline so durable admission can be checked again. All 50 autonomy tests passed, including rejection classification and a restart check proving a still-insufficient budget cannot send HTTP. The remapped jar was installed with matching SHA-256 `2814c8d192fd95b7f66d4c698f5964456203d58252c87f3accde2789e7f76235`. No new live inference was needed for these checks.
+
 ## Remaining deterministic choices and limitations
 
 A* costs, hazard exclusions, short-drop limits, steering and collision rules select the motor route to a model-selected destination. These are the closest remaining boundary between mechanics and policy: they can refuse hazardous routes. The model can request separate bounded movement. Recipe matching, screen transactions, reach checks, mining/attack timing, timeouts and retry limits also remain deterministic.

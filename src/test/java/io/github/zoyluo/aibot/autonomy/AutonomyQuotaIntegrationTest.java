@@ -199,6 +199,12 @@ final class AutonomyQuotaIntegrationTest {
                 assertEquals(1, ports.starts);
                 assertEquals(1, fixture.requests.get());
             }
+            engine.stop();
+            engine.start();
+            awaitPhase(engine, AutonomyState.Phase.BACKOFF);
+            // Restart rechecks the unchanged one-token budget and still cannot send HTTP.
+            assertEquals(Long.MAX_VALUE, engine.snapshot().get("providerRetryAtMillis").getAsLong());
+            assertEquals(1, fixture.requests.get());
         }
     }
 

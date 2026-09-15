@@ -20,6 +20,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class AutonomyProviderTest {
     private static final Gson GSON = new Gson();
+    @Test void onlyExplicitAdmissionRejectionsReleaseReservedUsage() {
+        assertTrue(AutonomyProvider.OpenAi.rejectedBeforeInference("{\"error\":{\"code\":\"rate_limit_exceeded\",\"type\":\"tokens\"}}"));
+        assertTrue(AutonomyProvider.OpenAi.rejectedBeforeInference("{\"error\":{\"code\":\"rate_limit_exceeded\",\"type\":\"requests\"}}"));
+        for (String body : List.of("invalid", "{}", "{\"error\":null}",
+                "{\"error\":{\"code\":\"server_error\",\"type\":\"tokens\"}}",
+                "{\"usage\":{},\"error\":{\"code\":\"rate_limit_exceeded\",\"type\":\"tokens\"}}",
+                "{\"choices\":[],\"error\":{\"code\":\"rate_limit_exceeded\",\"type\":\"tokens\"}}")) {
+            assertFalse(AutonomyProvider.OpenAi.rejectedBeforeInference(body), body);
+        }
+    }
     private static final JsonArray CAPABILITIES = JsonParser.parseString("""
             [{"name":"inspect","description":"Inspect perceptible state","parameters":{"type":"object","properties":{},"additionalProperties":false}}]
             """).getAsJsonArray();

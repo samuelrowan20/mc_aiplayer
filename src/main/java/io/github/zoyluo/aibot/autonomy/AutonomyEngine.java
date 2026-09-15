@@ -60,6 +60,7 @@ public final class AutonomyEngine implements AutoCloseable {
         if (phase != Phase.STOPPED) return;
         phase = Phase.READY;
         nextDecision = tick;
+        providerRetryAtMillis = 0; // Explicit restart rechecks admission; the durable ledger still enforces limits.
         event("started", new JsonObject());
     }
 

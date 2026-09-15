@@ -221,6 +221,8 @@ public interface AutonomyProvider extends AutoCloseable {
                                 if (response.statusCode() == 429) {
                                     Instant retryAt = retryAt(response);
                                     if (budget != null) {
+                                        if ("api.groq.com".equalsIgnoreCase(URI.create(config.baseUrl()).getHost())
+                                                && rejectedBeforeInference(response.body())) budget.settle(reservation, 0);
                                         try { budget.deferUntil(retryAt); }
                                         catch (IOException storageFailure) {
                                             throw new Deferred("provider_http_429_budget_storage_failure", retryAt);
@@ -349,6 +351,19 @@ public interface AutonomyProvider extends AutoCloseable {
                 // Usage metadata must not discard an otherwise valid decision.
             }
             return 0;
+        }
+
+        static boolean rejectedBeforeInference(String body) {
+            try {
+                JsonObject root = JsonParser.parseString(body).getAsJsonObject();
+                if (root.has("choices") || root.has("usage")) return false;
+                JsonObject error = root.getAsJsonObject("error");
+                return error != null && error.has("code") && error.has("type")
+                        && "rate_limit_exceeded".equals(error.get("code").getAsString())
+                        && Set.of("tokens", "requests").contains(error.get("type").getAsString());
+            } catch (RuntimeException malformed) {
+                return false;
+            }
         }
 
         private static JsonObject decisionTool(JsonArray capabilities) {
