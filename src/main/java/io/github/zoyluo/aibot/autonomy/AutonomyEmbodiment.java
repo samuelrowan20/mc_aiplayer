@@ -17,6 +17,7 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
 
@@ -38,6 +39,8 @@ public final class AutonomyEmbodiment implements AutonomyEngine.Ports {
     private int elapsed;
     private BlockPos openBlock;
     private String actionDimension;
+    private Vec3d previousMovePosition;
+    private double movementDistance;
 
     public AutonomyEmbodiment(Supplier<AIPlayerEntity> players) { this.players = players; }
     public AutonomyEmbodiment(AIPlayerEntity player) { this(() -> player); }
@@ -53,7 +56,7 @@ public final class AutonomyEmbodiment implements AutonomyEngine.Ports {
         capability(tools, "inspect", "Refresh observations, which are already refreshed before every decision. No movement or expanded view.", "", "");
         capability(tools, "look", "Turn facing toward absolute world coordinates within 32 blocks. No movement; all-direction observation sampling is unchanged.", coordinates, "x,y,z");
         capability(tools, "navigate", "Navigate to a visible/remembered cell within 32 blocks. Only observed/known path cells; no digging, placing or teleporting.", blockCoordinates, "x,y,z");
-        capability(tools, "move", "Local movement relative to facing, at most 100 ticks. Jump also presses swim-up in fluid.",
+        capability(tools, "move", "Local movement relative to facing, at most 100 ticks. Requires nonzero forward/strafe or jump=true; use deliberateWait to stay still. Jump also presses swim-up in fluid.",
                 "\"forward\":{\"type\":\"number\",\"minimum\":-1,\"maximum\":1},\"strafe\":{\"type\":\"number\",\"minimum\":-1,\"maximum\":1},\"sprint\":{\"type\":\"boolean\"},\"jump\":{\"type\":\"boolean\"}", "forward,strafe");
         capability(tools, "mine", "Mine exactly one visible reachable block with the current held item.", blockCoordinates, "x,y,z");
         capability(tools, "place", "Place the current held block against the selected support face.", blockCoordinates + face, "x,y,z,face");
@@ -122,14 +125,30 @@ public final class AutonomyEmbodiment implements AutonomyEngine.Ports {
                 case "look" -> {
                     Vec3d target = coordinates(args);
                     if (target.squaredDistanceTo(bot.getEyePos()) > 32 * 32) yield fail("target_too_far");
-                    yield convert(LookAction.lookAt(bot, target));
+                    float yaw = bot.getYaw(), pitch = bot.getPitch();
+                    ActionResult lookResult = LookAction.lookAt(bot, target);
+                    if (lookResult.isSuccess() && Math.abs(MathHelper.wrapDegrees(bot.getYaw() - yaw)) < 0.1
+                            && Math.abs(bot.getPitch() - pitch) < 0.1) {
+                        yield AutonomyState.Result.failure("already_facing_target",
+                                "Already facing this target; no turn or movement occurred. Observations already refresh automatically.");
+                    }
+                    yield convert(lookResult);
                 }
                 case "navigate" -> navigate(block(args));
                 case "move" -> {
-                    bot.getActionPack().setForward((float) number(args, "forward", -1, 1));
-                    bot.getActionPack().setStrafing((float) number(args, "strafe", -1, 1));
+                    float forward = (float) number(args, "forward", -1, 1);
+                    float strafe = (float) number(args, "strafe", -1, 1);
+                    boolean jump = flag(args, "jump");
+                    if (forward == 0 && strafe == 0 && !jump) {
+                        yield AutonomyState.Result.failure("zero_movement_input",
+                                "Both movement inputs are zero and jump is false. No movement requested; use deliberateWait for a purposeful pause.");
+                    }
+                    previousMovePosition = bot.getPos();
+                    movementDistance = 0;
+                    bot.getActionPack().setForward(forward);
+                    bot.getActionPack().setStrafing(strafe);
                     bot.getActionPack().setSprinting(flag(args, "sprint"));
-                    bot.getActionPack().setJumping(flag(args, "jump"));
+                    bot.getActionPack().setJumping(jump);
                     yield null;
                 }
                 case "mine" -> {
@@ -187,6 +206,10 @@ public final class AutonomyEmbodiment implements AutonomyEngine.Ports {
             cancelAction(); return fail("dimension_changed");
         }
         elapsed++;
+        if (active.name().equals("move")) {
+            movementDistance += bot.getPos().distanceTo(previousMovePosition);
+            previousMovePosition = bot.getPos();
+        }
         AutonomyState.Result result = null;
         if (mining != null) {
             if (reachableHit(miningTarget, null) == null
@@ -202,7 +225,10 @@ public final class AutonomyEmbodiment implements AutonomyEngine.Ports {
         } else if (active.name().equals("use_item") && !bot.isUsingItem()) {
             result = AutonomyState.Result.success("Held item use ended.");
         } else if (active.name().equals("move") && elapsed >= Math.min(100, active.maxTicks())) {
-            result = AutonomyState.Result.success("Bounded movement ended.");
+            result = movementDistance < 0.05
+                    ? AutonomyState.Result.failure("movement_blocked", "Movement inputs produced no measurable displacement.")
+                    : AutonomyState.Result.success(String.format(Locale.ROOT,
+                            "Bounded movement ended; traveled %.2f blocks.", movementDistance));
         }
         if (result == null && elapsed >= active.maxTicks()) {
             result = active.name().equals("use_item") ? AutonomyState.Result.success("Held item released at duration limit.")

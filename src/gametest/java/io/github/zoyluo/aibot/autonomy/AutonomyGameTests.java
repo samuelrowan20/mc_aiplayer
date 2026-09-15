@@ -278,6 +278,52 @@ public final class AutonomyGameTests implements FabricGameTest {
     }
 
     @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE, batchId = BATCH, tickLimit = 40)
+    public void noOpInputsReturnFailuresWithoutRejectingDistinctLookOrJump(TestContext context) {
+        BlockPos feet = context.getAbsolutePos(new BlockPos(2, 3, 2));
+        prepareFloor(context, feet);
+        AIPlayerEntity bot = spawn(context, "AutoNoopGT", feet);
+        AutonomyEmbodiment embodiment = new AutonomyEmbodiment(bot);
+        try {
+            Vec3d originalPosition = bot.getPos();
+            Vec3d target = bot.getEyePos().add(3, 0, 0);
+            JsonObject look = AutonomyObservation.position(target);
+            var firstLook = embodiment.start(new AutonomyDecision.Action("look", look, 20));
+            require(context, firstLook != null && firstLook.ok(), "a distinct look was incorrectly rejected");
+            require(context, bot.getRotationVector().dotProduct(target.subtract(bot.getEyePos()).normalize()) > 0.999,
+                    "successful look did not orient the real player toward the requested target");
+            var repeatedLook = embodiment.start(new AutonomyDecision.Action("look", look, 20));
+            require(context, repeatedLook != null && !repeatedLook.ok()
+                            && repeatedLook.code().equals("already_facing_target"),
+                    "looking at the same target again did not report an informative no-op failure");
+            var changedLook = embodiment.start(new AutonomyDecision.Action("look",
+                    AutonomyObservation.position(bot.getEyePos().add(0, 0, -3)), 20));
+            require(context, changedLook != null && changedLook.ok(),
+                    "a previous no-op prevented a later distinct look");
+
+            JsonObject movement = new JsonObject();
+            movement.addProperty("forward", 0);
+            movement.addProperty("strafe", 0);
+            movement.addProperty("sprint", true);
+            movement.addProperty("jump", false);
+            var zeroMove = embodiment.start(new AutonomyDecision.Action("move", movement, 20));
+            require(context, zeroMove != null && !zeroMove.ok()
+                            && zeroMove.code().equals("zero_movement_input"),
+                    "zero directional input was accepted as physical movement");
+            require(context, !bot.getActionPack().hasActiveActions() && bot.getPos().equals(originalPosition),
+                    "rejected no-op left motor input active or relocated the player");
+            movement.addProperty("sprint", false);
+            movement.addProperty("jump", true);
+            require(context, embodiment.start(new AutonomyDecision.Action("move", movement, 20)) == null,
+                    "jump-only movement was incorrectly rejected as a no-op");
+            require(context, bot.getActionPack().hasActiveActions(), "accepted jump-only input did not engage the motor controller");
+        } finally {
+            embodiment.cancel();
+            AIPlayerManager.INSTANCE.despawn(bot.getServer(), "AutoNoopGT");
+        }
+        context.complete();
+    }
+
+    @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE, batchId = BATCH, tickLimit = 40)
     public void selectedBlockMiningRetainsTheModelChosenHeldItem(TestContext context) {
         BlockPos feet = context.getAbsolutePos(new BlockPos(2, 3, 2));
         prepareFloor(context, feet);
@@ -304,6 +350,59 @@ public final class AutonomyGameTests implements FabricGameTest {
             AIPlayerManager.INSTANCE.despawn(bot.getServer(), "AutoHeldGT");
         }
         context.complete();
+    }
+
+    @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE, batchId = "autonomyNoOpCollision", tickLimit = 160)
+    public void collisionBlockedMovementReportsFailureToNextDecision(TestContext context) {
+        BlockPos feet = context.getAbsolutePos(new BlockPos(2, 3, 2));
+        prepareFloor(context, feet);
+        for (int x = -1; x <= 1; x++) {
+            for (int y = 0; y <= 2; y++) {
+                context.getWorld().setBlockState(feet.add(x, y, 1), Blocks.STONE.getDefaultState(), Block.NOTIFY_ALL);
+            }
+        }
+        AIPlayerEntity bot = spawn(context, "AutoBlockedGT", feet);
+        // Fixture begins against the wall so the requested motion has no initial free gap.
+        bot.refreshPositionAndAngles(feet.getX() + 0.5, feet.getY(),
+                feet.getZ() + 1.0 - bot.getWidth() * 0.5, 0, 0);
+        Vec3d start = bot.getPos();
+        AtomicInteger decisions = new AtomicInteger();
+        AtomicBoolean sawBlockedFailure = new AtomicBoolean();
+        AutonomyCoordinator.INSTANCE.start(bot, input -> {
+            var intention = new AutonomyDecision.Intention("Fixture-selected movement", "Public collision test purpose", "active");
+            AutonomyDecision decision;
+            if (decisions.incrementAndGet() == 1) {
+                JsonObject movement = new JsonObject();
+                movement.addProperty("forward", 1);
+                movement.addProperty("strafe", 0);
+                decision = new AutonomyDecision(intention, new AutonomyDecision.Action("move", movement, 10), null, null);
+            } else {
+                JsonObject state = input.getAsJsonObject("working_state");
+                if (state.has("lastResult") && state.get("lastResult").isJsonObject()) {
+                    JsonObject result = state.getAsJsonObject("lastResult");
+                    sawBlockedFailure.set(!result.get("ok").getAsBoolean()
+                            && result.get("code").getAsString().equals("movement_blocked"));
+                }
+                decision = new AutonomyDecision(intention, null,
+                        new AutonomyDecision.Wait("Observe the failed movement", 300), null);
+            }
+            return CompletableFuture.completedFuture(new AutonomyProvider.Reply(decision, 0, 0, 0));
+        });
+        context.runAtTick(110, () -> {
+            try {
+                require(context, sawBlockedFailure.get() && decisions.get() >= 2,
+                        "ordinary collision was reported as successful motion or omitted from the next decision");
+                require(context, bot.getPos().distanceTo(start) < 0.05,
+                        "blocked movement relocated the player through or around the wall");
+                require(context, context.getWorld().getBlockState(feet.south()).isOf(Blocks.STONE),
+                        "blocked movement mutated its obstacle");
+                require(context, !bot.getActionPack().hasActiveActions() && TaskManager.INSTANCE.getActive(bot).isEmpty(),
+                        "blocked movement left a motor input or strategic fallback active");
+            } finally {
+                AIPlayerManager.INSTANCE.despawn(bot.getServer(), "AutoBlockedGT");
+            }
+            context.complete();
+        });
     }
 
     @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE, batchId = BATCH, tickLimit = 40)

@@ -173,6 +173,12 @@ A first grammar-only test produced an invalid movement magnitude. The provider n
 
 The remapped jar was installed with matching SHA-256 `6ac717f27aff5cf560dcacd2191c598a4f5b4b92660325a4dd186b919ecda5a0`. No Groq inference tokens were used for this switch.
 
+## Physical no-op feedback: autonomy.8 (2026-09-15)
+
+The live local model repeatedly selected the same look target and once requested movement with both directional inputs zero and jumping disabled. Those actions were reported as successes despite no physical change. Repeated look now reports `already_facing_target`; zero movement reports `zero_movement_input`. Bounded movement measures distance traveled and reports `movement_blocked` below 0.05 blocks. These results feed the existing failure memory and repetition guard. The model still chooses its next action.
+
+All 24 engine/provider unit tests passed. Three scoped Minecraft harness tests passed: distinct and repeated looks with zero-input rejection and jump-only acceptance; real wall collision with failure delivered to the next decision; and the existing continuous loop with actual movement and failure recovery. The harness reported no failed tests after completion. Jar packaging succeeded with SHA-256 `7ea5334b70b23f31d065e823319a89ea728fead5082ac325cfb4791dc2cfed8d`. Live model behavior with this feedback remains unverified.
+
 ## Remaining deterministic choices and limitations
 
 A* costs, hazard exclusions, short-drop limits, steering and collision rules select the motor route to a model-selected destination. These are the closest remaining boundary between mechanics and policy: they can refuse hazardous routes. The model can request separate bounded movement. Recipe matching, screen transactions, reach checks, mining/attack timing, timeouts and retry limits also remain deterministic.
