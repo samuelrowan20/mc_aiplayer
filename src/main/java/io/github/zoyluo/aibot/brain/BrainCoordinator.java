@@ -51,6 +51,11 @@ public final class BrainCoordinator {
     }
 
     public boolean handleMessage(AIPlayerEntity bot, String senderName, String text) {
+        if (io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.owns(bot)) {
+            sendPanelChat(bot, "system", "Autonomy owns this bot. Use /aibot autonomy manual "
+                    + bot.getGameProfile().getName() + " to return to assigned goals.");
+            return false;
+        }
         ensureConfigured();
         BotConversation conversation = conversations.computeIfAbsent(bot.getUuid(), BotConversation::new);
         boolean supersededDecision = conversation.decision.busy();

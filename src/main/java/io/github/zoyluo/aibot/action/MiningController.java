@@ -21,10 +21,17 @@ public final class MiningController {
     private BlockState targetState;
     private float progress;
     private int elapsed;
+    private final boolean selectTool;
 
     public MiningController(BlockPos pos, Direction face) {
+        this(pos, face, true);
+    }
+
+    /** A caller can retain the explicitly selected held tool for a single mechanical mine. */
+    public MiningController(BlockPos pos, Direction face, boolean selectTool) {
         this.pos = pos;
         this.face = face;
+        this.selectTool = selectTool;
     }
 
     public ActionResult tick(ActionPack pack) {
@@ -40,6 +47,11 @@ public final class MiningController {
         }
 
         LookAction.lookAtBlock(player, pos, face);
+        if (!selectTool && !io.github.zoyluo.aibot.mode.ObservableWorldQuery
+                .canObserveBlockWithInsetFaces(player, pos)) {
+            abort(player);
+            return ActionResult.failed("target_no_longer_visible");
+        }
         double reach = player.getAttributeValue(EntityAttributes.BLOCK_INTERACTION_RANGE);
         if (player.getEyePos().distanceTo(pos.toCenterPos()) > reach + 0.5D) {
             abort(player);
@@ -47,7 +59,9 @@ public final class MiningController {
         }
 
         if (!started) {
-            ToolSelector.equipBestTool(player, state);
+            if (selectTool) {
+                ToolSelector.equipBestTool(player, state);
+            }
             BotLog.action(player, "mine_start", "pos", LogFields.pos(pos), "face", face);
             player.interactionManager.processBlockBreakingAction(
                     pos,

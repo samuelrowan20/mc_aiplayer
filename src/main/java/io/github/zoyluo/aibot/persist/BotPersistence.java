@@ -168,10 +168,16 @@ public final class BotPersistence {
             if (persisted == null || persisted.bot() == null) {
                 continue;
             }
-            Optional<AIPlayerEntity> bot = AIPlayerManager.INSTANCE.respawnFromRecord(server, persisted.bot());
+            Optional<AIPlayerEntity> bot = AIPlayerManager.INSTANCE.respawnFromRecord(
+                    server, persisted.bot(), persisted.autonomy() != null);
             if (bot.isPresent()) {
                 restored++;
-                missions.add(new RestoredMission(bot.get(), persisted.missions()));
+                if (persisted.autonomy() != null) {
+                    io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.restore(
+                            bot.get(), persisted.autonomy());
+                } else {
+                    missions.add(new RestoredMission(bot.get(), persisted.missions()));
+                }
             }
         }
         TaskBoard.INSTANCE.replaceAll(migrateJobs(snapshot.jobs()));
@@ -228,7 +234,8 @@ public final class BotPersistence {
     private RuntimeSnapshot captureSnapshot() {
         List<PersistedBot> bots = new ArrayList<>();
         for (AIPlayerEntity bot : AIPlayerManager.INSTANCE.all()) {
-            bots.add(new PersistedBot(capture(bot), GoalExecutor.INSTANCE.captureRuntime(bot)));
+            bots.add(new PersistedBot(capture(bot), GoalExecutor.INSTANCE.captureRuntime(bot),
+                    io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.snapshot(bot)));
         }
         return new RuntimeSnapshot(
                 RuntimeSnapshot.CURRENT_SCHEMA,

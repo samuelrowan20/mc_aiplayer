@@ -45,6 +45,7 @@ public final class RuntimeLifecycleCoordinator {
         BotPersistence.INSTANCE.resumeWrites();
         RuntimeRecipeIndex.rebuild(server);
         KnowledgeBase.INSTANCE.attachServer(server);
+        io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.configure(server, config);
         int restored = BotPersistence.INSTANCE.loadAndRespawn(server);
         BotLog.lifecycle("server_runtime_ready", "restored_bots", restored,
                 "runtime_session", TaskBoard.INSTANCE.runtimeSessionId());
@@ -54,6 +55,7 @@ public final class RuntimeLifecycleCoordinator {
         BotLog.lifecycle("server_stopping");
         BotPersistence.INSTANCE.freezeWrites();
         int persisted = BotPersistence.INSTANCE.saveAll(server);
+        io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.shutdown();
         AIPlayerManager.INSTANCE.onServerStopping(server);
         BrainCoordinator.INSTANCE.shutdown();
         clearWorldRuntime();
@@ -64,6 +66,7 @@ public final class RuntimeLifecycleCoordinator {
     }
 
     public void resetBot(AIPlayerEntity bot, IntentController.ControlOrigin origin, String reason) {
+        io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.stop(bot);
         IntentController.INSTANCE.cancelAll(bot, origin, reason);
         BrainCoordinator.INSTANCE.reset(bot);
         GoalExecutor.INSTANCE.unload(bot);
@@ -88,6 +91,7 @@ public final class RuntimeLifecycleCoordinator {
 
     /** Explicit despawn is deletion: publish cancellation first, then forget every cached projection. */
     public void deleteBot(AIPlayerEntity bot) {
+        io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.remove(bot);
         IntentController.INSTANCE.cancelAll(bot, IntentController.ControlOrigin.SYSTEM, "bot_despawn");
         BrainCoordinator.INSTANCE.reset(bot);
         IdleCoordinator.INSTANCE.onBotRemoved(bot);

@@ -46,6 +46,9 @@ public final class TaskManager {
 
     private void assign(AIPlayerEntity bot, Task task, TaskOrigin origin,
                         boolean publishStatus) {
+        if (io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.owns(bot)) {
+            throw new IllegalStateException("autonomous_control_active: use /aibot autonomy manual first");
+        }
         if (isUserPaused(bot) && !origin.safety()) {
             throw new IllegalStateException("mission_user_paused");
         }
@@ -318,6 +321,9 @@ public final class TaskManager {
                 continue;
             }
             AIPlayerEntity player = bot.get();
+            if (io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.owns(player)) {
+                continue;
+            }
             TaskOrigin origin = activeOrigins.get(uuid);
             if ((origin == null || !origin.safety()) && !isCritical(task)
                     && !TpsGuard.INSTANCE.shouldTickNonCriticalTask(server)) {

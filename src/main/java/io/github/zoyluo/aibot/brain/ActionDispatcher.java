@@ -71,6 +71,9 @@ public final class ActionDispatcher {
     }
 
     private ToolDefinition.ToolResult invoke(AIPlayerEntity bot, ChatToolCall call) {
+        if (io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.owns(bot)) {
+            return new ToolDefinition.ToolResult(false, "blocked: autonomous_control_active");
+        }
         try {
             if (TaskManager.INSTANCE.isUserPaused(bot) && !USER_PAUSED_ALLOWED_TOOLS.contains(call.name())) {
                 return new ToolDefinition.ToolResult(false, "blocked: mission_user_paused");

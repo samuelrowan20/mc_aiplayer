@@ -10,6 +10,9 @@
       "io.github.zoyluo.aibot.gametest.AIBotHarnessTestMod"
     ],
     "fabric-gametest": [
+      "io.github.zoyluo.aibot.autonomy.AutonomyGameTests",
+      "io.github.zoyluo.aibot.autonomy.AutonomyPhysicsGameTests",
+      "io.github.zoyluo.aibot.autonomy.AutonomyRestoreGameTests",
       "io.github.zoyluo.aibot.gametest.AIBotDeterministicGameTests",
       "io.github.zoyluo.aibot.command.AIBotVerifyFailFastGameTests",
       "io.github.zoyluo.aibot.goal.GoalPlannerMiningGameTests",

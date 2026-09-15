@@ -113,6 +113,18 @@ public final class AIPlayerManager {
                                           float pitch,
                                           GameMode gameMode,
                                           UUID ownerUuid) {
+        return spawn(server, name, world, pos, yaw, pitch, gameMode, ownerUuid, false);
+    }
+
+    private Optional<AIPlayerEntity> spawn(MinecraftServer server,
+                                          String name,
+                                          ServerWorld world,
+                                          Vec3d pos,
+                                          float yaw,
+                                          float pitch,
+                                          GameMode gameMode,
+                                          UUID ownerUuid,
+                                          boolean preservePosition) {
         String normalizedName = normalizeName(name);
         if (nameIndex.containsKey(normalizedName) || server.getPlayerManager().getPlayer(name) != null) {
             return Optional.empty();
@@ -126,7 +138,9 @@ public final class AIPlayerManager {
         AIPlayerEntity player = new AIPlayerEntity(server, world, profile, options);
         FakeClientConnection connection = new FakeClientConnection(NetworkSide.SERVERBOUND);
         ConnectedClientData clientData = new ConnectedClientData(profile, 0, options, false);
-        Vec3d safePos = safeSpawnPosition(world, pos, name);
+        // Reload is not a movement capability: preserve an autonomous player's saved physical state,
+        // including being airborne or in water, instead of searching hidden terrain for a rescue spot.
+        Vec3d safePos = preservePosition ? pos : safeSpawnPosition(world, pos, name);
 
         server.getPlayerManager().onPlayerConnect(connection, player, clientData);
         player.teleport(world, safePos.x, safePos.y, safePos.z, Collections.emptySet(), yaw, pitch, true);
@@ -154,6 +168,11 @@ public final class AIPlayerManager {
     }
 
     public Optional<AIPlayerEntity> respawnFromRecord(MinecraftServer server, BotRecord record) {
+        return respawnFromRecord(server, record, false);
+    }
+
+    public Optional<AIPlayerEntity> respawnFromRecord(MinecraftServer server, BotRecord record,
+                                                     boolean preservePosition) {
         RestoreTarget target = restoreTarget(server, record);
         GameMode gameMode = GameMode.SURVIVAL;  // AI 助手一律生存,忽略旧存档可能存的 creative
         Optional<AIPlayerEntity> spawned = spawn(
@@ -164,7 +183,7 @@ public final class AIPlayerManager {
                 record.yaw(),
                 record.pitch(),
                 gameMode,
-                parseUuid(record.ownerUuid()));
+                parseUuid(record.ownerUuid()), preservePosition);
         spawned.ifPresent(bot -> {
             BotPersistence.applyInventory(bot, record.inventoryNbt());
             setRole(bot, record.role());
@@ -205,6 +224,25 @@ public final class AIPlayerManager {
 
     public Optional<AIPlayerEntity> getByUuid(UUID uuid) {
         return Optional.ofNullable(players.get(uuid));
+    }
+
+    /** Keeps fake-player identity after vanilla replaces the entity during respawn. */
+    public void replaceAfterRespawn(AIPlayerEntity player) {
+        players.put(player.getUuid(), player);
+    }
+
+    /** Equivalent to the client's respawn request: vanilla owns drops, bed/anchor and spawn selection. */
+    public AIPlayerEntity respawnVanilla(AIPlayerEntity deadPlayer) {
+        if (deadPlayer.isAlive()) throw new IllegalStateException("Cannot respawn a living player");
+        var replacement = deadPlayer.getServer().getPlayerManager().respawnPlayer(
+                deadPlayer, false, net.minecraft.entity.Entity.RemovalReason.KILLED);
+        if (!(replacement instanceof AIPlayerEntity player)) {
+            throw new IllegalStateException("Vanilla respawn did not preserve fake player type");
+        }
+        replaceAfterRespawn(player);
+        player.networkHandler.player = player;
+        player.networkHandler.syncWithPlayerPosition();
+        return player;
     }
 
     public Optional<AIPlayerEntity> botOf(UUID ownerUuid) {

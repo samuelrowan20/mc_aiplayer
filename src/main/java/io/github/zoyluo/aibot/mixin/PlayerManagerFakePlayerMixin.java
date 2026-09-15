@@ -16,6 +16,17 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 
 @Mixin(PlayerManager.class)
 public abstract class PlayerManagerFakePlayerMixin {
+    @Redirect(method = "respawnPlayer", at = @At(value = "NEW",
+            target = "(Lnet/minecraft/server/MinecraftServer;Lnet/minecraft/server/world/ServerWorld;Lcom/mojang/authlib/GameProfile;Lnet/minecraft/network/packet/c2s/common/SyncedClientOptions;)Lnet/minecraft/server/network/ServerPlayerEntity;"))
+    private ServerPlayerEntity aibot$preservePlayerType(MinecraftServer server,
+            net.minecraft.server.world.ServerWorld world, com.mojang.authlib.GameProfile profile,
+            net.minecraft.network.packet.c2s.common.SyncedClientOptions options,
+            ServerPlayerEntity oldPlayer, boolean alive, net.minecraft.entity.Entity.RemovalReason reason) {
+        return oldPlayer instanceof AIPlayerEntity
+                ? new AIPlayerEntity(server, world, profile, options)
+                : new ServerPlayerEntity(server, world, profile, options);
+    }
+
     @Shadow
     @Final
     private MinecraftServer server;

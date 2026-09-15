@@ -31,6 +31,7 @@ public final class IntentController {
                                                       ControlOrigin origin,
                                                       String reason) {
         requireServerThread(bot);
+        io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.stop(bot);
         return cancel(bot, origin, reason, IntentControlTransaction.Scope.ALL);
     }
 
@@ -63,6 +64,10 @@ public final class IntentController {
 
     public boolean pause(AIPlayerEntity bot, ControlOrigin origin, String reason) {
         requireServerThread(bot);
+        if (io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.owns(bot)) {
+            io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.pause(bot);
+            return true;
+        }
         String normalized = normalizeReason(origin, reason);
         if (TaskManager.INSTANCE.isUserPaused(bot)) {
             return false;
@@ -85,6 +90,10 @@ public final class IntentController {
 
     public boolean resume(AIPlayerEntity bot, ControlOrigin origin, String reason) {
         requireServerThread(bot);
+        if (io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.owns(bot)) {
+            io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.resume(bot);
+            return true;
+        }
         String normalized = normalizeReason(origin, reason);
         if (!TaskManager.INSTANCE.isUserPaused(bot)) {
             return false;

@@ -42,6 +42,7 @@ public final class AIBotCommand {
                 .then(literal("list")
                         .executes(context -> list(context.getSource())))
                 .then(AIBotBrainSubcommand.build())
+                .then(AIBotAutonomySubcommand.build())
                 .then(AIBotLogSubcommand.build())
                 .then(AIBotPersistSubcommand.build())
                 .then(AIBotJobSubcommand.build())

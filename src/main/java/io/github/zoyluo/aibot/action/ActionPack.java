@@ -463,6 +463,8 @@ public final class ActionPack {
         this.strafing = 0.0F;
         this.jumping = false;
         this.jumpTicks = 0;
+        player.forwardSpeed = 0.0F;
+        player.sidewaysSpeed = 0.0F;
         player.setJumping(false);
     }
 

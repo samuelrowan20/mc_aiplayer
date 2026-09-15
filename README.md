@@ -4,6 +4,10 @@
 
 <h1 align="center">AIBot</h1>
 
+This fork adds continuous, model-directed survival alongside assigned-goal mode.
+See [AUTONOMY.md](AUTONOMY.md) for installation, provider configuration, commands, and the overnight procedure,
+and [AUTONOMY_TOOL_AUDIT.md](AUTONOMY_TOOL_AUDIT.md) for the mechanical/strategic boundary.
+
 <p align="center">
   <b>A server-side Minecraft AI agent with LLM planning and deterministic execution.</b><br>
   Give Bob a supported goal in English or Chinese; the goal engine plans it and task state machines carry it out.<br>

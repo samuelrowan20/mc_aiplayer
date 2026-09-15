@@ -10,6 +10,7 @@ import net.minecraft.util.math.Direction;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 public final class NeighborEnumerator {
     private static final Direction[] HORIZONTAL = {
@@ -21,6 +22,7 @@ public final class NeighborEnumerator {
 
     private final boolean canPillar;
     private final boolean allowDig;
+    private final Predicate<BlockPos> readableCell;
     private BlockPos pathGoal; // 终点格:岩浆预检豁免用(终点贴岩浆由任务层封堵处理,不该让唯一入口无解)
 
     public NeighborEnumerator() {
@@ -37,8 +39,18 @@ public final class NeighborEnumerator {
     // 而启用挖穿会把每个相邻实心方块都当邻居,使搜索退化成"3D 体积扩散",被困/地下时极易撑爆到
     // SEARCH_LIMIT(实测 5 格距离的 move 都 SEARCH_LIMIT 的机制根因)。纯步行无解再开第二阶段挖穿。
     public NeighborEnumerator(boolean canPillar, boolean allowDig) {
+        this(canPillar, allowDig, null);
+    }
+
+    /** Visibility-scoped walking graph. Unknown geometry is never queried as a fallback. */
+    public NeighborEnumerator(Predicate<BlockPos> readableCell) {
+        this(false, false, java.util.Objects.requireNonNull(readableCell));
+    }
+
+    private NeighborEnumerator(boolean canPillar, boolean allowDig, Predicate<BlockPos> readableCell) {
         this.canPillar = canPillar;
         this.allowDig = allowDig;
+        this.readableCell = readableCell;
     }
 
     public void setPathGoal(BlockPos goal) {
@@ -49,13 +61,13 @@ public final class NeighborEnumerator {
         List<NeighborCandidate> result = new ArrayList<>(HORIZONTAL.length);
         for (Direction direction : HORIZONTAL) {
             BlockPos target = current.offset(direction);
-            if (Standability.isStandable(world, target)) {
+            if (isStandable(world, target)) {
                 result.add(new NeighborCandidate(target, MoveType.WALK, 0));
                 continue;
             }
 
             BlockPos jumpTarget = target.up();
-            if (canJumpOnto(world, current, target) && Standability.isStandable(world, jumpTarget)) {
+            if (canJumpOnto(world, current, target) && isStandable(world, jumpTarget)) {
                 result.add(new NeighborCandidate(jumpTarget, MoveType.JUMP_UP, 0));
                 continue;
             }
@@ -91,7 +103,7 @@ public final class NeighborEnumerator {
     }
 
     // NAV-3:同高对角移动。仅当目标格可站、且两个正交相邻格都"可穿过"(不切墙角)时才允许。
-    private static void addDiagonals(BlockPos current, ServerWorld world, List<NeighborCandidate> result) {
+    private void addDiagonals(BlockPos current, ServerWorld world, List<NeighborCandidate> result) {
         Direction[][] pairs = {
                 {Direction.NORTH, Direction.EAST},
                 {Direction.NORTH, Direction.WEST},
@@ -100,7 +112,7 @@ public final class NeighborEnumerator {
         };
         for (Direction[] pair : pairs) {
             BlockPos diag = current.offset(pair[0]).offset(pair[1]);
-            if (!Standability.isStandable(world, diag)) {
+            if (!isStandable(world, diag)) {
                 continue;
             }
             if (!passableColumn(world, diag)) {
@@ -126,20 +138,30 @@ public final class NeighborEnumerator {
         }
     }
 
-    private static boolean collisionEmpty(ServerWorld world, BlockPos pos) {
-        return world.getBlockState(pos).getCollisionShape(world, pos).isEmpty();
+    boolean isStandable(ServerWorld world, BlockPos pos) {
+        // Standability reads precisely these three cells. Check all before touching its cache/world.
+        return canRead(pos) && canRead(pos.up()) && canRead(pos.down())
+                && Standability.isStandable(world, pos);
     }
 
-    private static boolean passableColumn(ServerWorld world, BlockPos feet) {
+    private boolean canRead(BlockPos pos) {
+        return readableCell == null || readableCell.test(pos);
+    }
+
+    private boolean collisionEmpty(ServerWorld world, BlockPos pos) {
+        return canRead(pos) && world.getBlockState(pos).getCollisionShape(world, pos).isEmpty();
+    }
+
+    private boolean passableColumn(ServerWorld world, BlockPos feet) {
         return collisionEmpty(world, feet) && collisionEmpty(world, feet.up());
     }
 
-    private static boolean canJumpFrom(ServerWorld world, BlockPos current) {
+    private boolean canJumpFrom(ServerWorld world, BlockPos current) {
         return collisionEmpty(world, current.up()) && collisionEmpty(world, current.up(2));
     }
 
-    private static boolean canJumpOnto(ServerWorld world, BlockPos current, BlockPos front) {
-        if (!canJumpFrom(world, current)) {
+    private boolean canJumpOnto(ServerWorld world, BlockPos current, BlockPos front) {
+        if (!canRead(front) || !canJumpFrom(world, current)) {
             return false;
         }
         BlockState frontState = world.getBlockState(front);
@@ -152,7 +174,7 @@ public final class NeighborEnumerator {
         return collisionEmpty(world, front.up()) && collisionEmpty(world, front.up(2));
     }
 
-    private static NeighborCandidate findDrop(ServerWorld world, BlockPos target) {
+    private NeighborCandidate findDrop(ServerWorld world, BlockPos target) {
         if (!collisionEmpty(world, target)) {
             return null;
         }
@@ -162,7 +184,7 @@ public final class NeighborEnumerator {
         int maxFall = AIBotConfig.get().nav().maxSafeFall();
         for (int fall = 1; fall <= maxFall; fall++) {
             BlockPos landing = target.down(fall);
-            if (Standability.isStandable(world, landing)) {
+            if (isStandable(world, landing)) {
                 return new NeighborCandidate(landing, MoveType.DROP_DOWN, fall);
             }
             if (!collisionEmpty(world, landing)) {
@@ -213,7 +235,7 @@ public final class NeighborEnumerator {
         return false;
     }
 
-    private static boolean hasHeadroom(ServerWorld world, BlockPos target) {
+    private boolean hasHeadroom(ServerWorld world, BlockPos target) {
         // 挖掘语义的头位:已空 或 可挖(执行器 tickDigThrough 会把脚位+头位都挖开)。
         // 原"头上两格必须已空"把穿实心山体判成无路——每一步头位都是石头,DIG 邻居一个都生成不出,
         // 这正是 geo_slope/wall/pocket 全卡 no_progress 的根因(挖掘寻路只能贴地刨坑、不能穿山)。

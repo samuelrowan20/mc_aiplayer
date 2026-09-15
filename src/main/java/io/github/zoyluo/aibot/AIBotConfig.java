@@ -87,6 +87,8 @@ public record AIBotConfig(
         logProfileResolution(profileResolution, path, loaded.operatorCapabilities());
 
         String envKey = System.getenv("DEEPSEEK_API_KEY");
+        String genericKey = System.getenv("AIBOT_API_KEY");
+        if (genericKey != null && !genericKey.isBlank()) envKey = genericKey;
         if (envKey != null && !envKey.isBlank()) {
             loaded = loaded.withDeepSeek(loaded.deepseek().withApiKey(envKey));
         }

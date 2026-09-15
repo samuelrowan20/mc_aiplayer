@@ -19,6 +19,10 @@ public final class BotTickCoordinator {
         boolean runDanger = tick % guard.dangerScanInterval() == 0;
         boolean runBackground = tick % guard.scanInterval() == 0;
         for (AIPlayerEntity bot : AIPlayerManager.INSTANCE.all()) {
+            if (io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.owns(bot)) {
+                io.github.zoyluo.aibot.autonomy.AutonomyCoordinator.INSTANCE.tick(bot);
+                continue;
+            }
             // SAFE-1:环境安全网最先跑;若正在自救(溺水/岩浆)则本 tick 接管,跳过其它检查。
             if (NavSafetyNet.INSTANCE.tickBot(server, bot)) {
                 continue;

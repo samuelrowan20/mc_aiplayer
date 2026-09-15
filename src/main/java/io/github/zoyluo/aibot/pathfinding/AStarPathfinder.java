@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.function.Predicate;
 
 public final class AStarPathfinder {
     private static final int DEFAULT_MAX_NODES = 10_000;
@@ -35,6 +36,7 @@ public final class AStarPathfinder {
     private final NeighborEnumerator enumerator;
     private final boolean canPillar;
     private final boolean allowDig;
+    private final boolean observationScoped;
     // 加权 A*(ε-admissible):挖掘接近场景启发式(欧氏×1)远低于真实挖掘成本(×8),搜索退化成
     // 全向泛洪 50ms 必 TIMEOUT(geo 矩阵实测)。ε=3 牺牲最优性换收敛速度——挖矿不需要最短路。
     private final double heuristicWeight;
@@ -72,13 +74,33 @@ public final class AStarPathfinder {
 
     // 带权构造(统一接近原语用 ε=3):见 heuristicWeight 注释。
     public AStarPathfinder(ServerWorld world, BlockPos start, BlockPos goal, int maxNodes, long maxMillis, boolean canPillar, boolean allowDig, double heuristicWeight) {
+        this(world, start, goal, maxNodes, maxMillis, canPillar, allowDig, heuristicWeight, null);
+    }
+
+    /** Autonomous navigation: exact endpoints, observed geometry only, no dig/pillar or shared result cache. */
+    public AStarPathfinder(ServerWorld world, BlockPos start, BlockPos goal,
+                           int maxNodes, long maxMillis, Predicate<BlockPos> readableCell) {
+        this(world, start, goal, maxNodes, maxMillis, false, false, 1.0D,
+                java.util.Objects.requireNonNull(readableCell));
+    }
+
+    private AStarPathfinder(ServerWorld world, BlockPos start, BlockPos goal,
+                            int maxNodes, long maxMillis, boolean canPillar, boolean allowDig,
+                            double heuristicWeight, Predicate<BlockPos> readableCell) {
         this.world = world;
         this.start = start.toImmutable();
         this.goal = goal.toImmutable();
         this.canPillar = canPillar;
         this.allowDig = allowDig;
+        this.observationScoped = readableCell != null;
         this.heuristicWeight = heuristicWeight;
-        this.enumerator = new NeighborEnumerator(canPillar, allowDig);
+        if (readableCell == null) {
+            this.enumerator = new NeighborEnumerator(canPillar, allowDig);
+        } else {
+            Map<BlockPos, Boolean> visibility = new HashMap<>();
+            this.enumerator = new NeighborEnumerator(pos -> visibility.computeIfAbsent(
+                    pos.toImmutable(), readableCell::test));
+        }
         this.maxNodes = maxNodes;
         this.maxMillis = maxMillis;
     }
@@ -117,6 +139,7 @@ public final class AStarPathfinder {
     }
 
     private PathfindingResult findPath(boolean useResultCache, int minimumY) {
+        useResultCache &= !observationScoped;
         long startTime = System.currentTimeMillis();
         BotLog.path(null, "findpath_start", "start", LogFields.pos(start), "goal", LogFields.pos(goal));
         Standability.clearCache();
@@ -211,6 +234,9 @@ public final class AStarPathfinder {
     }
 
     private BlockPos resolveEndpoint(BlockPos requested, boolean startPoint) {
+        if (observationScoped) {
+            return enumerator.isStandable(world, requested) ? requested : null;
+        }
         if (Standability.isStandable(world, requested)) {
             return requested;
         }
