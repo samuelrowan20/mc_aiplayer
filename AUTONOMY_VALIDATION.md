@@ -6,6 +6,22 @@ Based on upstream commit `a029fa6a3760fd0f83834c104051b041d986da60`. Minecraft r
 
 ## Validation scope
 
+### Ollama compatibility update (autonomy.2)
+
+The local Ollama 0.32.13 / Qwen3 4B test exposed unsuccessful tool-call responses. Added optional `decisionFormat: "json_schema"`, preserving the default tool-call protocol. Both formats validate the same typed decision and use the same physical allowlist. Complete action/wait schema branches fixed the local grammar behavior; a schema with shared root properties beside `oneOf` did not enforce the intended decision shape in this environment.
+
+Validation for this update:
+
+- `gradlew --no-daemon test --tests io.github.zoyluo.aibot.autonomy.AutonomyProviderTest remapJar`: successful in 38 seconds, **10 provider tests passed**.
+- Final `gradlew --no-daemon remapJar` after adding the effort override: successful in 34 seconds. Artifact SHA-256: `94a8c9b71aebe90f74966f1557dafd72f7d8c67650c4a923d4411c2c568c50c4`.
+- A final standalone harness using the actual provider implementation and all **16 capability definitions** parsed a live local-model decision: **44,932 ms**, **1,308 prompt tokens**, **112 completion tokens**, a model-authored intention and bounded `inspect` action.
+- Endpoint `http://localhost:11434/v1`; model alias `qwen3:4b-aibot` reuses original `qwen3:4b` weights/template with a 16,384-token context. Configuration uses JSON schema, `reasoningMode: openai`, autonomy-specific `reasoningEffort: none`, 1,024 output tokens and a 180-second timeout. The effort override bypasses legacy DeepSeek-only effort-name normalization.
+- This is a live inference/parse check with synthetic observations. It does **not** establish in-game behavior with this model or overnight performance. The prior Minecraft tests below were not rerun for this provider/configuration-only change.
+
+Changed in this update: `AutonomyProvider.java`, `AutonomyCoordinator.java`, `AutonomyProviderTest.java`, `gradle.properties`, `AUTONOMY.md`, and this report. Artifact: `build/libs/aibot-0.0.1-autonomy.2.jar`. Local evidence: `build-ollama.log`, `build-ollama-package.log`, provider JUnit XML, and the development workspace's `.tools/ollama-check/final-provider-result.log`.
+
+### Original autonomy.1 clean build
+
 Final command: `.\gradlew.bat --no-daemon clean build`.
 
 **BUILD SUCCESSFUL in 4m 53s.** JUnit: **377 passed**, zero failures/errors/skips. Minecraft GameTests: **598 passed**, zero failures (587 inherited tests and 11 new autonomy tests). Tests used Java 21, Fabric Loader 0.18.4, Fabric API 0.114.1+1.21.3, and the repository's Gradle wrapper. `git diff --cached --check` also passed.

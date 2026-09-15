@@ -4,7 +4,11 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonToken;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.StringReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -29,14 +33,20 @@ public interface AutonomyProvider extends AutoCloseable {
     record Reply(AutonomyDecision decision, long latencyMillis, int promptTokens, int completionTokens) { }
 
     record Config(String baseUrl, String model, String apiKey, int maxTokens,
-                  int timeoutSeconds, String reasoningMode, String reasoningEffort) {
+                  int timeoutSeconds, String reasoningMode, String reasoningEffort, String decisionFormat) {
+        public Config(String baseUrl, String model, String apiKey, int maxTokens,
+                      int timeoutSeconds, String reasoningMode, String reasoningEffort) {
+            this(baseUrl, model, apiKey, maxTokens, timeoutSeconds, reasoningMode, reasoningEffort, "tool_call");
+        }
+
         public Config {
             URI uri = URI.create(baseUrl);
             if (!Set.of("http", "https").contains(uri.getScheme()) || uri.getHost() == null
                     || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null
                     || model == null || model.isBlank() || maxTokens < 1 || maxTokens > 131072
                     || timeoutSeconds < 1 || timeoutSeconds > 600
-                    || !Set.of("none", "openai", "deepseek").contains(reasoningMode)) {
+                    || !Set.of("none", "openai", "deepseek").contains(reasoningMode)
+                    || !Set.of("tool_call", "json_schema").contains(decisionFormat)) {
                 throw new IllegalArgumentException("Invalid autonomy provider configuration");
             }
             apiKey = apiKey == null ? "" : apiKey;
@@ -65,7 +75,9 @@ public interface AutonomyProvider extends AutoCloseable {
             this.config = config;
             this.tool = decisionTool(capabilities);
             this.prompt = DIRECTIVE + "\nYou choose all intentions and priorities. An intention can persist across actions. "
-                    + "Use decide once to continue, revise, abandon, complete, defer or replace your intention, "
+                    + (config.decisionFormat().equals("json_schema")
+                        ? "Return one JSON decision matching the supplied response schema to continue, revise, abandon, complete, defer or replace your intention, "
+                        : "Use decide once to continue, revise, abandon, complete, defer or replace your intention, ")
                     + "and select exactly one physical action or deliberateWait with a reason and bounded ticks. "
                     + "The server runs at nominally 20 ticks per second. Actions report success or failure; "
                     + "failure does not satisfy the action. Use observations and results to evaluate your next decision. "
@@ -105,15 +117,41 @@ public interface AutonomyProvider extends AutoCloseable {
                 messages.add(message);
             }
             body.add("messages", messages);
-            JsonArray tools = new JsonArray();
-            tools.add(tool);
-            body.add("tools", tools);
-            JsonObject choice = new JsonObject();
-            choice.addProperty("type", "function");
-            JsonObject function = new JsonObject();
-            function.addProperty("name", "decide");
-            choice.add("function", function);
-            body.add("tool_choice", choice);
+            if (config.decisionFormat().equals("json_schema")) {
+                JsonObject format = new JsonObject();
+                format.addProperty("type", "json_schema");
+                JsonObject schema = new JsonObject();
+                schema.addProperty("name", "decision");
+                schema.addProperty("strict", true);
+                // Complete alternatives also work with grammar-based providers that discard root
+                // sibling properties when compiling a oneOf schema.
+                JsonObject decisionSchema = new JsonObject();
+                JsonArray alternatives = new JsonArray();
+                for (String selected : List.of("action", "deliberateWait")) {
+                    JsonObject branch = tool.getAsJsonObject("function").getAsJsonObject("parameters").deepCopy();
+                    branch.remove("oneOf");
+                    branch.getAsJsonObject("properties").remove(selected.equals("action") ? "deliberateWait" : "action");
+                    JsonArray required = new JsonArray();
+                    required.add("intention");
+                    required.add(selected);
+                    branch.add("required", required);
+                    alternatives.add(branch);
+                }
+                decisionSchema.add("oneOf", alternatives);
+                schema.add("schema", decisionSchema);
+                format.add("json_schema", schema);
+                body.add("response_format", format);
+            } else {
+                JsonArray tools = new JsonArray();
+                tools.add(tool);
+                body.add("tools", tools);
+                JsonObject choice = new JsonObject();
+                choice.addProperty("type", "function");
+                JsonObject function = new JsonObject();
+                function.addProperty("name", "decide");
+                choice.add("function", function);
+                body.add("tool_choice", choice);
+            }
             String base = config.baseUrl().replaceAll("/+$", "");
             String endpoint = base.endsWith("/chat/completions") ? base : base + "/chat/completions";
             var builder = HttpRequest.newBuilder(URI.create(endpoint))
@@ -128,7 +166,7 @@ public interface AutonomyProvider extends AutoCloseable {
                 if (response.statusCode() != 200) {
                     throw new IllegalStateException("provider_http_" + response.statusCode());
                 }
-                return parse(response.body(), (System.nanoTime() - started) / 1_000_000);
+                return parse(response.body(), (System.nanoTime() - started) / 1_000_000, config.decisionFormat());
             });
             // HttpRequest.timeout may stop applying after headers arrive. Bound the entire body too.
             reply.orTimeout(config.timeoutSeconds(), TimeUnit.SECONDS);
@@ -146,6 +184,10 @@ public interface AutonomyProvider extends AutoCloseable {
         }
 
         static Reply parse(String text, long latencyMillis) {
+            return parse(text, latencyMillis, "tool_call");
+        }
+
+        static Reply parse(String text, long latencyMillis, String decisionFormat) {
             JsonObject root = JsonParser.parseString(text).getAsJsonObject();
             JsonArray choices = root.getAsJsonArray("choices");
             if (choices == null || choices.size() != 1) throw new IllegalArgumentException("Expected one decision");
@@ -153,13 +195,32 @@ public interface AutonomyProvider extends AutoCloseable {
             if (choice.has("finish_reason") && "length".equals(choice.get("finish_reason").getAsString())) {
                 throw new IllegalArgumentException("Truncated decision");
             }
-            JsonArray calls = choice.getAsJsonObject("message").getAsJsonArray("tool_calls");
-            if (calls == null || calls.size() != 1) throw new IllegalArgumentException("Expected one tool call");
-            JsonObject function = calls.get(0).getAsJsonObject().getAsJsonObject("function");
-            if (!"decide".equals(function.get("name").getAsString())) throw new IllegalArgumentException("Unknown tool");
-            String arguments = function.get("arguments").getAsString();
+            JsonObject message = choice.getAsJsonObject("message");
+            String arguments;
+            if (decisionFormat.equals("json_schema")) {
+                var content = message.get("content");
+                if (content == null || !content.isJsonPrimitive() || !content.getAsJsonPrimitive().isString()) {
+                    throw new IllegalArgumentException("Expected JSON decision content");
+                }
+                arguments = content.getAsString();
+            } else {
+                JsonArray calls = message.getAsJsonArray("tool_calls");
+                if (calls == null || calls.size() != 1) throw new IllegalArgumentException("Expected one tool call");
+                JsonObject function = calls.get(0).getAsJsonObject().getAsJsonObject("function");
+                if (!"decide".equals(function.get("name").getAsString())) throw new IllegalArgumentException("Unknown tool");
+                arguments = function.get("arguments").getAsString();
+            }
             if (arguments.length() > 24000) throw new IllegalArgumentException("Decision exceeds bound");
-            AutonomyDecision decision = GSON.fromJson(arguments, AutonomyDecision.class);
+            AutonomyDecision decision;
+            if (decisionFormat.equals("json_schema")) {
+                try (JsonReader reader = new JsonReader(new StringReader(arguments))) {
+                    decision = GSON.getAdapter(AutonomyDecision.class).read(reader);
+                    if (reader.peek() != JsonToken.END_DOCUMENT) throw new IllegalArgumentException("Expected one JSON decision");
+                } catch (IOException exception) {
+                    throw new IllegalArgumentException("Malformed JSON decision", exception);
+                }
+            } else decision = GSON.fromJson(arguments, AutonomyDecision.class);
+            if (decision == null) throw new IllegalArgumentException("Missing decision");
             JsonObject usage = root.has("usage") && root.get("usage").isJsonObject()
                     ? root.getAsJsonObject("usage") : new JsonObject();
             return new Reply(decision, latencyMillis, tokens(usage, "prompt_tokens"), tokens(usage, "completion_tokens"));

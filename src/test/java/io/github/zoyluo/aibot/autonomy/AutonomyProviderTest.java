@@ -163,6 +163,106 @@ final class AutonomyProviderTest {
         } finally { server.stop(0); }
     }
 
+    @Test void optionalJsonSchemaModeSendsDecisionSchemaAndParsesPublicJsonContent() throws Exception {
+        AtomicReference<JsonObject> request = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            request.set(JsonParser.parseString(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject());
+            byte[] bytes = jsonResponse(validDecisionJson()).getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var output = exchange.getResponseBody()) { output.write(bytes); }
+        });
+        server.start();
+        try (AutonomyProvider provider = AutonomyProvider.openAi(new AutonomyProvider.Config(
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "compatible-model", "test-key",
+                1000, 5, "none", "low", "json_schema"), CAPABILITIES)) {
+            AutonomyProvider.Reply reply = provider.decide(new JsonObject()).get(5, TimeUnit.SECONDS);
+            assertEquals("inspect", reply.decision().action().name());
+            assertEquals("Relevant memory", reply.decision().memorySummary());
+            assertEquals(20, reply.promptTokens());
+            assertFalse(GSON.toJson(reply).contains("PRIVATE_SECRET"));
+            assertFalse(request.get().has("tools"));
+            assertFalse(request.get().has("tool_choice"));
+            JsonObject format = request.get().getAsJsonObject("response_format");
+            assertEquals("json_schema", format.get("type").getAsString());
+            JsonObject schema = format.getAsJsonObject("json_schema");
+            assertEquals("decision", schema.get("name").getAsString());
+            assertTrue(schema.get("strict").getAsBoolean());
+            JsonObject parameters = schema.getAsJsonObject("schema");
+            assertEquals(2, parameters.getAsJsonArray("oneOf").size());
+            JsonObject actionBranch = parameters.getAsJsonArray("oneOf").get(0).getAsJsonObject();
+            JsonObject waitBranch = parameters.getAsJsonArray("oneOf").get(1).getAsJsonObject();
+            for (JsonObject branch : List.of(actionBranch, waitBranch)) {
+                assertEquals("object", branch.get("type").getAsString());
+                assertFalse(branch.get("additionalProperties").getAsBoolean());
+                assertEquals("intention", branch.getAsJsonArray("required").get(0).getAsString());
+                assertTrue(branch.getAsJsonObject("properties").has("intention"));
+                assertTrue(branch.getAsJsonObject("properties").has("memorySummary"));
+                assertFalse(branch.has("oneOf"));
+            }
+            assertEquals("action", actionBranch.getAsJsonArray("required").get(1).getAsString());
+            assertFalse(actionBranch.getAsJsonObject("properties").has("deliberateWait"));
+            assertEquals("deliberateWait", waitBranch.getAsJsonArray("required").get(1).getAsString());
+            assertFalse(waitBranch.getAsJsonObject("properties").has("action"));
+            assertTrue(waitBranch.getAsJsonObject("properties").has("deliberateWait"));
+            assertEquals("inspect", actionBranch.getAsJsonObject("properties").getAsJsonObject("action")
+                    .getAsJsonArray("oneOf").get(0).getAsJsonObject().getAsJsonObject("properties")
+                    .getAsJsonObject("name").getAsJsonArray("enum").get(0).getAsString());
+            String system = request.get().getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString();
+            assertTrue(system.startsWith(AutonomyProvider.DIRECTIVE));
+            assertTrue(system.contains("Return one JSON decision"));
+            assertFalse(system.contains("Use decide once"));
+        } finally { server.stop(0); }
+    }
+
+    @Test void jsonModeRejectsNullMalformedMultipleAndUnstructuredOutput() {
+        String valid = validDecisionJson();
+        for (String invalid : List.of("null", "{}", "[]", "", "not json", "```json\n" + valid + "\n```",
+                valid + " {}", valid.replace("\"intention\"", "intention"), " ".repeat(24001))) {
+            assertThrows(RuntimeException.class, () -> AutonomyProvider.OpenAi.parse(jsonResponse(invalid), 0, "json_schema"));
+        }
+        JsonObject nullContent = JsonParser.parseString(jsonResponse(valid)).getAsJsonObject();
+        nullContent.getAsJsonArray("choices").get(0).getAsJsonObject().getAsJsonObject("message").add("content", null);
+        assertThrows(IllegalArgumentException.class, () -> AutonomyProvider.OpenAi.parse(nullContent.toString(), 0, "json_schema"));
+        JsonObject truncated = JsonParser.parseString(jsonResponse(valid)).getAsJsonObject();
+        truncated.getAsJsonArray("choices").get(0).getAsJsonObject().addProperty("finish_reason", "length");
+        assertThrows(IllegalArgumentException.class, () -> AutonomyProvider.OpenAi.parse(truncated.toString(), 0, "json_schema"));
+    }
+
+    @Test void jsonModeEnforcesExactlyOneValidatedActionOrWaitAndRemainsOptIn() {
+        JsonObject decision = JsonParser.parseString(validDecisionJson()).getAsJsonObject();
+        decision.add("deliberateWait", JsonParser.parseString("{\"reason\":\"Observe\",\"ticks\":20}"));
+        assertThrows(RuntimeException.class, () -> AutonomyProvider.OpenAi.parse(jsonResponse(decision.toString()), 0, "json_schema"));
+        decision.remove("action");
+        var wait = AutonomyProvider.OpenAi.parse(jsonResponse(decision.toString()), 0, "json_schema").decision();
+        assertNull(wait.action());
+        assertEquals(20, wait.deliberateWait().ticks());
+        decision.getAsJsonObject("deliberateWait").addProperty("ticks", 0);
+        assertThrows(RuntimeException.class, () -> AutonomyProvider.OpenAi.parse(jsonResponse(decision.toString()), 0, "json_schema"));
+        decision.remove("deliberateWait");
+        assertThrows(RuntimeException.class, () -> AutonomyProvider.OpenAi.parse(jsonResponse(decision.toString()), 0, "json_schema"));
+        assertEquals("tool_call", new AutonomyProvider.Config("http://localhost/v1", "model", "", 100, 5, "none", "low").decisionFormat());
+        assertThrows(IllegalArgumentException.class, () -> new AutonomyProvider.Config(
+                "http://localhost/v1", "model", "", 100, 5, "none", "low", "arbitrary_text"));
+        assertThrows(IllegalArgumentException.class, () -> AutonomyProvider.OpenAi.parse(jsonResponse(validDecisionJson()), 0));
+    }
+
+    private static String validDecisionJson() {
+        return JsonParser.parseString(response()).getAsJsonObject().getAsJsonArray("choices").get(0).getAsJsonObject()
+                .getAsJsonObject("message").getAsJsonArray("tool_calls").get(0).getAsJsonObject()
+                .getAsJsonObject("function").get("arguments").getAsString();
+    }
+
+    private static String jsonResponse(String decision) {
+        JsonObject root = JsonParser.parseString(response()).getAsJsonObject();
+        JsonObject choice = root.getAsJsonArray("choices").get(0).getAsJsonObject();
+        choice.addProperty("finish_reason", "stop");
+        JsonObject message = choice.getAsJsonObject("message");
+        message.remove("tool_calls");
+        message.addProperty("content", decision);
+        return root.toString();
+    }
+
     private static String response() {
         AutonomyDecision decision = new AutonomyDecision(
                 new AutonomyDecision.Intention("Observe", "Public purpose", "active"),

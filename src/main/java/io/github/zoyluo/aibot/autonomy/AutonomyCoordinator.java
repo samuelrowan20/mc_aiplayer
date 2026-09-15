@@ -38,6 +38,7 @@ public final class AutonomyCoordinator {
         shutdown();
         JsonObject options = GSON.toJsonTree(AutonomySettings.defaults()).getAsJsonObject();
         options.addProperty("reasoningMode", "none");
+        options.addProperty("decisionFormat", "tool_call");
         Path path = FabricLoader.getInstance().getConfigDir().resolve("aibot-autonomy.json");
         try {
             if (Files.exists(path)) {
@@ -54,7 +55,9 @@ public final class AutonomyCoordinator {
             var llm = config.deepseek();
             providerConfig = new AutonomyProvider.Config(llm.baseUrl(), llm.model(), llm.apiKey(),
                     llm.maxTokens(), settings.providerTimeoutSeconds(),
-                    options.get("reasoningMode").getAsString(), llm.reasoningEffort());
+                    options.get("reasoningMode").getAsString(),
+                    options.has("reasoningEffort") ? options.get("reasoningEffort").getAsString() : llm.reasoningEffort(),
+                    options.get("decisionFormat").getAsString());
         } catch (IOException | RuntimeException exception) {
             providerConfig = null;
             AIBotMod.LOGGER.error("Autonomy configuration invalid; fix aibot-autonomy.json and restart ({})",

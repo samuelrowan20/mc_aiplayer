@@ -94,7 +94,7 @@ Journal fields include UTC timestamp, engine tick, game time, dimension/position
 | Development Yarn mappings | **1.21.3+build.2** |
 
 1. Install a Fabric 1.21.3 server or Fabric 1.21.3 client profile for a single-player world.
-2. Place `build/libs/aibot-0.0.1-autonomy.1.jar` and the matching Fabric API jar in `mods/`. Remove older duplicate AIBot jars.
+2. Place `build/libs/aibot-0.0.1-autonomy.2.jar` and the matching Fabric API jar in `mods/`. Remove older duplicate AIBot jars. Do not install the `-sources.jar`.
 3. Start once to generate configuration, then stop normally.
 4. Configure the provider and strict profile below; restart with Java 21.
 5. For multiplayer, the bot runs server-side. Installing AIBot on the client additionally provides its existing panel. Commands work without using that panel.
@@ -111,7 +111,7 @@ The build includes JUnit and Minecraft GameTests. The GameTest source set is iso
 
 ## Model configuration
 
-Use an OpenAI-compatible **Chat Completions endpoint supporting function/tool calls**. A ChatGPT subscription supplies no API key. A hosted compatible provider is sufficient; a local model is optional.
+Use an OpenAI-compatible **Chat Completions endpoint supporting function/tool calls or JSON-schema responses**. A ChatGPT subscription supplies no API key. A hosted compatible provider is sufficient; a local model is optional.
 
 In `config/aibot.json`, keep other generated options and set:
 
@@ -144,7 +144,49 @@ $env:AIBOT_PROFILE = 'strict_survival'
 
 `AIBOT_API_KEY` takes precedence over the legacy `DEEPSEEK_API_KEY`, then the config key. Do not put real keys in source control. Keyless compatible local endpoints are also allowed.
 
-`config/aibot-autonomy.json` is generated with mechanical bounds. Set `reasoningMode` to `none` (default, portable), `openai` (`reasoning_effort`), or `deepseek` (explicit thinking configuration). Use only a mode your provider supports. `reasoningEffort` comes from the main provider section. Private reasoning output is discarded. Changing configuration requires restart; invalid autonomy configuration prevents starting it.
+`config/aibot-autonomy.json` is generated with mechanical bounds. Set `reasoningMode` to `none` (default, portable), `openai` (`reasoning_effort`), or `deepseek` (explicit thinking configuration). Use only a mode your provider supports. An optional `reasoningEffort` in this file overrides the main provider section, whose legacy validation only accepts DeepSeek effort names. Private reasoning output is discarded. Changing configuration requires restart; invalid autonomy configuration prevents starting it.
+
+`decisionFormat` in that file defaults to `tool_call`. Providers with schema-constrained JSON responses can use `json_schema` instead. Both formats pass through the same decision validation and physical allowlist. JSON mode sends complete action/wait alternatives because some grammar implementations ignore sibling properties beside `oneOf`.
+
+### Local Ollama / Qwen3 4B
+
+Ollama can use `http://localhost:11434/v1` with the placeholder key `ollama`. The original `qwen3:4b` returned a valid decision in a local schema-constrained smoke test. Its tool-call responses failed validation in that test, so use the JSON mode introduced in autonomy.2.
+
+For growing observations and memory, create an alias with a larger context window. This reuses the installed weights and original template:
+
+```text
+# Save these two lines as Modelfile.aibot
+FROM qwen3:4b
+PARAMETER num_ctx 16384
+```
+
+```powershell
+ollama create qwen3:4b-aibot -f Modelfile.aibot
+```
+
+Set the existing `deepseek` section in `config/aibot.json`:
+
+```json
+{
+  "baseUrl": "http://localhost:11434/v1",
+  "apiKey": "ollama",
+  "model": "qwen3:4b-aibot",
+  "maxTokens": 1024
+}
+```
+
+Set these fields in `config/aibot-autonomy.json`, keeping the other generated fields:
+
+```json
+{
+  "decisionFormat": "json_schema",
+  "reasoningMode": "openai",
+  "reasoningEffort": "none",
+  "providerTimeoutSeconds": 180
+}
+```
+
+Here `openai` selects the compatible `reasoning_effort` request field; the endpoint remains local Ollama. Leave Ollama running and restart Minecraft after changing configuration or the jar. Latency depends on local hardware and context size; this smoke test does not establish overnight survival quality. See [Ollama's compatibility documentation](https://docs.ollama.com/api/openai-compatibility) for response formats and model context configuration.
 
 ## Commands
 
