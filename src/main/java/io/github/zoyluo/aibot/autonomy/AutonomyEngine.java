@@ -259,8 +259,9 @@ public final class AutonomyEngine implements AutoCloseable {
     }
 
     private void providerFailed(String code, long retryAtMillis) {
-        providerFailures = Math.min(30, providerFailures + 1);
-        long delay = Math.min(settings.maxBackoffTicks(),
+        boolean scheduled = code.equals("daily_token_budget_or_provider_cooldown");
+        if (!scheduled) providerFailures = Math.min(30, providerFailures + 1);
+        long delay = scheduled ? 0 : Math.min(settings.maxBackoffTicks(),
                 (long) settings.initialBackoffTicks() << (providerFailures - 1));
         nextDecision = tick + delay;
         providerRetryAtMillis = Math.max(0, retryAtMillis);
@@ -269,7 +270,7 @@ public final class AutonomyEngine implements AutoCloseable {
         details.addProperty("code", code);
         details.addProperty("retry_ticks", delay);
         if (providerRetryAtMillis > 0) details.addProperty("retry_at", Instant.ofEpochMilli(providerRetryAtMillis).toString());
-        event("provider_error", details);
+        event(scheduled ? "provider_deferred" : "provider_error", details);
     }
 
     private void invalidateRequest() {

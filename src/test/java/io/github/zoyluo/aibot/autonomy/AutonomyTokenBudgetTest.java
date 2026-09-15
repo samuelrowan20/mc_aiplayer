@@ -76,6 +76,22 @@ final class AutonomyTokenBudgetTest {
         assertEquals(100, budget.status().usedTokens());
     }
 
+    @Test void requestSpacingSurvivesSettlementAndRestartWithoutSpendingMoreTokens() throws Exception {
+        Path path = directory.resolve("paced.json");
+        var budget = new AutonomyTokenBudget(path, 200000, clock);
+        var first = budget.reserve(12000, 60000);
+        budget.settle(first, 4500);
+        var restarted = new AutonomyTokenBudget(path, 200000, clock);
+        var denied = assertThrows(AutonomyTokenBudget.BudgetUnavailableException.class,
+                () -> restarted.reserve(12000, 60000));
+        assertEquals(clock.instant().plusSeconds(60), denied.nextEligibleAt());
+        assertEquals(4500, restarted.status().usedTokens());
+        clock.advance(Duration.ofSeconds(60));
+        restarted.reserve(12000, 60000);
+        assertEquals(16500, restarted.status().usedTokens());
+        assertEquals(clock.instant().plusSeconds(60), restarted.status().cooldownUntil());
+    }
+
     @Test void unknownUsageRetainsFullReservationAndOverrunChargesActualUsage() throws Exception {
         Path path = directory.resolve("uncertain.json");
         var budget = new AutonomyTokenBudget(path, 100, clock);

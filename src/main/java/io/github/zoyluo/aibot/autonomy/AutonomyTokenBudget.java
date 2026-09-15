@@ -85,7 +85,14 @@ public final class AutonomyTokenBudget {
 
     /** A successful return means this reservation reached durable storage before HTTP may begin. */
     public Reservation reserve(int worstCaseTokens) throws IOException {
+        return reserve(worstCaseTokens, 0);
+    }
+
+    /** Persist request spacing in the same transaction as admission, shared by all bots. */
+    public Reservation reserve(int worstCaseTokens, long minimumIntervalMillis) throws IOException {
         if (worstCaseTokens < 1) throw new IllegalArgumentException("Reservation must be positive");
+        if (minimumIntervalMillis < 0 || minimumIntervalMillis > 600000)
+            throw new IllegalArgumentException("Request interval must be 0..600000 milliseconds");
         return locked((ledger, now) -> {
             if (worstCaseTokens > limit) {
                 throw new BudgetUnavailableException("reservation_exceeds_daily_limit", Instant.MAX);
@@ -100,7 +107,9 @@ public final class AutonomyTokenBudget {
             }
             Reservation reservation = new Reservation(UUID.randomUUID().toString(), now, worstCaseTokens);
             ledger.charges().add(new Charge(reservation.id(), now, null, worstCaseTokens, null));
-            write(ledger, now);
+            write(minimumIntervalMillis == 0 ? ledger : new Ledger(1, ledger.charges(),
+                    Math.max(ledger.cooldownUntilMillis() == null ? now : ledger.cooldownUntilMillis(),
+                            now + minimumIntervalMillis)), now);
             return reservation;
         });
     }

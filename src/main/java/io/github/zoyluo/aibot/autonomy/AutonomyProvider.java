@@ -207,7 +207,8 @@ public interface AutonomyProvider extends AutoCloseable {
                 worker.execute(() -> {
                     try {
                         if (reply.isDone()) return;
-                        var reservation = budget == null ? null : budget.reserve(reservationTokens);
+                        var reservation = budget == null ? null : budget.reserve(reservationTokens,
+                                "api.groq.com".equalsIgnoreCase(URI.create(config.baseUrl()).getHost()) ? 60000 : 0);
                         CompletableFuture<HttpResponse<String>> request;
                         synchronized (transport) {
                             if (reply.isDone() || closed) return;
