@@ -190,7 +190,7 @@ Here `openai` selects the compatible `reasoning_effort` request field; the endpo
 
 ## Groq quota and compact context
 
-For Groq, set `deepseek.baseUrl` to `https://api.groq.com/openai/v1`, `model` to `qwen/qwen3.8-27b`, and `maxTokens` to `1024` in `config/aibot.json`. Keep the key in that local configuration. Set `decisionFormat: "tool_call"`, `reasoningMode: "openai"`, `reasoningEffort: "none"`, `maxSummaryChars: 2000`, and `dailyTokenLimit: 200000` in `config/aibot-autonomy.json`. Restart Minecraft after changing configuration or the jar.
+For Groq, set `deepseek.baseUrl` to `https://api.groq.com/openai/v1`, `model` to `qwen/qwen3.8-27b`, and `maxTokens` to `512` in `config/aibot.json`. Keep the key in that local configuration. Set `decisionFormat: "tool_call"`, `reasoningMode: "openai"`, `reasoningEffort: "none"`, `maxSummaryChars: 2000`, and `dailyTokenLimit: 200000` in `config/aibot-autonomy.json`. Restart Minecraft after changing configuration or the jar. Accounts may have a separate output-token minute limit; this installation rejected a 1,024-token output allowance against a 1,000-token limit. Request spacing alone cannot fix an output allowance above that limit.
 
 Each inference contains the standing directive, one action schema, current status/inventory, up to 16 visible blocks, 8 entities, 8 remembered positions, a 2,000-character memory summary, the previous action/result, and at most four relevant recent events. Screen contents are bounded and duplicate player inventory slots are omitted. Target coordinates are retained when present. The full journal and runtime history stay on disk. The model can replace its persistent summary in each decision.
 

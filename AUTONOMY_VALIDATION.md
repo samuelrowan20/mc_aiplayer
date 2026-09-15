@@ -149,6 +149,12 @@ The live `.3` instance received valid Groq decisions, including movement and ins
 
 The `.4` provider reserves a shared 60-second interval atomically with token admission. The interval survives settlement and restart. Waiting for that interval does not consume another reservation or increment the provider-failure counter. All 49 autonomy tests passed, including the new pacing persistence test, and `remapJar` succeeded. Live validation of this pacing change remains pending. No additional paid/provider inference was used for these tests.
 
+## Confirmed Groq output-limit correction (2026-09-15)
+
+After `.4` pacing, a diagnostic request still returned 429 with `rate_limit_exceeded`: the account's output tokens per minute limit was 1,000 while the request allowed 1,024. `Retry-After` was absent and the combined token-limit header showed 8,000 tokens available. This confirmed an oversized output allowance as a cause of rejection; the earlier minute-spacing hypothesis did not explain this error.
+
+The local configuration and Groq setup instructions now use `maxTokens: 512`. A live synthetic request through the actual provider and shared budget returned a valid inspect decision in 1,540 ms, with 3,178 prompt tokens and 138 completion tokens. The ledger retained prior uncertain reservations. No production Java changed for this correction; Minecraft must restart to load the new configuration. In-game behavior with the corrected allowance still needs verification.
+
 ## Remaining deterministic choices and limitations
 
 A* costs, hazard exclusions, short-drop limits, steering and collision rules select the motor route to a model-selected destination. These are the closest remaining boundary between mechanics and policy: they can refuse hazardous routes. The model can request separate bounded movement. Recipe matching, screen transactions, reach checks, mining/attack timing, timeouts and retry limits also remain deterministic.
