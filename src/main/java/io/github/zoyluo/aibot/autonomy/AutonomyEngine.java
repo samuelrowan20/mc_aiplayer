@@ -37,6 +37,7 @@ public final class AutonomyEngine implements AutoCloseable {
     private final LinkedHashMap<String, Integer> failures = new LinkedHashMap<>();
     private Phase phase = Phase.STOPPED;
     private long tick, nextDecision, actionDeadline, waitDeadline, requestDeadlineNanos;
+    private long providerRetryAtMillis;
     private int providerFailures;
     private AutonomyDecision.Intention intention;
     private AutonomyDecision.Action action;
@@ -151,14 +152,20 @@ public final class AutonomyEngine implements AutoCloseable {
                 purposefulWait = null;
                 complete(Result.success("Purposeful wait ended"));
             }
-            if ((phase == Phase.READY || phase == Phase.BACKOFF) && tick >= nextDecision) decide();
+            if ((phase == Phase.READY || phase == Phase.BACKOFF) && tick >= nextDecision
+                    && System.currentTimeMillis() >= providerRetryAtMillis) decide();
         } catch (RuntimeException exception) {
             if (phase == Phase.DECIDING || pending != null) {
                 invalidateRequest();
                 // Error types only: remote response bodies may contain private reasoning or credentials.
                 Throwable failure = rootCause(exception);
                 String message = failure.getMessage();
-                providerFailed(message != null && message.matches("provider_http_[0-9]{3}")
+                if (failure instanceof AutonomyProvider.Deferred deferred) {
+                    long retryAt;
+                    try { retryAt = deferred.retryAt().toEpochMilli(); }
+                    catch (ArithmeticException beyondClockRange) { retryAt = Long.MAX_VALUE; }
+                    providerFailed(deferred.getMessage(), retryAt);
+                } else providerFailed(message != null && message.matches("provider_http_[0-9]{3}|token_budget_storage_failure")
                         ? message : "provider_failure:" + failure.getClass().getSimpleName());
             } else {
                 ports.cancel();
@@ -189,9 +196,7 @@ public final class AutonomyEngine implements AutoCloseable {
             failures.clear();
             failureEvidence = observedEvidence;
         }
-        JsonObject context = new JsonObject();
-        context.add("observation", observation);
-        context.add("working_state", GSON.toJsonTree(state()));
+        JsonObject context = AutonomyContext.build(observation, state());
         phase = Phase.DECIDING;
         nextDecision = tick + settings.minDecisionTicks();
         requestDeadlineNanos = System.nanoTime() + settings.providerTimeoutSeconds() * 1_000_000_000L;
@@ -250,14 +255,20 @@ public final class AutonomyEngine implements AutoCloseable {
     }
 
     private void providerFailed(String code) {
+        providerFailed(code, 0);
+    }
+
+    private void providerFailed(String code, long retryAtMillis) {
         providerFailures = Math.min(30, providerFailures + 1);
         long delay = Math.min(settings.maxBackoffTicks(),
                 (long) settings.initialBackoffTicks() << (providerFailures - 1));
         nextDecision = tick + delay;
+        providerRetryAtMillis = Math.max(0, retryAtMillis);
         phase = Phase.BACKOFF;
         JsonObject details = new JsonObject();
         details.addProperty("code", code);
         details.addProperty("retry_ticks", delay);
+        if (providerRetryAtMillis > 0) details.addProperty("retry_at", Instant.ofEpochMilli(providerRetryAtMillis).toString());
         event("provider_error", details);
     }
 
@@ -294,10 +305,15 @@ public final class AutonomyEngine implements AutoCloseable {
                 purposefulWait == null ? 0 : Math.max(0, waitDeadline - tick), lastResult, memorySummary,
                 List.copyOf(episodes), failures.entrySet().stream()
                         .map(entry -> new AutonomyState.Failure(entry.getKey(), entry.getValue())).toList(),
-                failureEvidence, providerFailures, Math.max(0, nextDecision - tick));
+                failureEvidence, providerFailures, Math.max(Math.max(0, nextDecision - tick),
+                        Math.max(0, providerRetryAtMillis - System.currentTimeMillis()) / 50));
     }
 
-    public JsonObject snapshot() { return GSON.toJsonTree(state()).getAsJsonObject(); }
+    public JsonObject snapshot() {
+        JsonObject snapshot = GSON.toJsonTree(state()).getAsJsonObject();
+        snapshot.addProperty("providerRetryAtMillis", providerRetryAtMillis);
+        return snapshot;
+    }
 
     public void restore(JsonObject snapshot) {
         if (snapshot == null || snapshot.toString().length() > 512000) return;
@@ -326,6 +342,11 @@ public final class AutonomyEngine implements AutoCloseable {
         providerFailures = Math.max(0, Math.min(30, saved.providerFailures()));
         failureEvidence = AutonomyState.bounded(saved.failureEvidence(), 64);
         nextDecision = tick + Math.max(0, Math.min(settings.maxBackoffTicks(), saved.retryRemainingTicks()));
+        providerRetryAtMillis = snapshot.has("providerRetryAtMillis")
+                ? Math.max(0, snapshot.get("providerRetryAtMillis").getAsLong()) : 0;
+        if (providerRetryAtMillis > 0) nextDecision = tick;
+        // A corrected request/configuration may fit after restart; admission still checks the ledger.
+        if (providerRetryAtMillis == Long.MAX_VALUE) providerRetryAtMillis = 0;
         phase = switch (saved.phase()) {
             case STOPPED -> Phase.STOPPED;
             case PAUSED -> Phase.PAUSED;

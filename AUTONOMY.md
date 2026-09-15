@@ -188,6 +188,18 @@ Set these fields in `config/aibot-autonomy.json`, keeping the other generated fi
 
 Here `openai` selects the compatible `reasoning_effort` request field; the endpoint remains local Ollama. Leave Ollama running and restart Minecraft after changing configuration or the jar. Latency depends on local hardware and context size; this smoke test does not establish overnight survival quality. See [Ollama's compatibility documentation](https://docs.ollama.com/api/openai-compatibility) for response formats and model context configuration.
 
+## Groq quota and compact context
+
+For Groq, set `deepseek.baseUrl` to `https://api.groq.com/openai/v1`, `model` to `qwen/qwen3.8-27b`, and `maxTokens` to `1024` in `config/aibot.json`. Keep the key in that local configuration. Set `decisionFormat: "tool_call"`, `reasoningMode: "openai"`, `reasoningEffort: "none"`, `maxSummaryChars: 2000`, and `dailyTokenLimit: 200000` in `config/aibot-autonomy.json`. Restart Minecraft after changing configuration or the jar.
+
+Each inference contains the standing directive, one action schema, current status/inventory, up to 16 visible blocks, 8 entities, 8 remembered positions, a 2,000-character memory summary, the previous action/result, and at most four relevant recent events. Screen contents are bounded and duplicate player inventory slots are omitted. Target coordinates are retained when present. The full journal and runtime history stay on disk. The model can replace its persistent summary in each decision.
+
+Groq admission is capped at 200,000 tokens per rolling 24 hours across all autonomous bots and worlds sharing the configuration folder. A lower configured cap is honored. Before HTTP, the durable ledger reserves request UTF-8 bytes plus the maximum output tokens and a framing allowance. Valid provider usage releases unused reservation; timeouts, malformed usage, and other uncertain outcomes retain it conservatively. Pending requests retain their reservation for an additional ten minutes. Missing disk access or corrupt budget state blocks requests. Preserve `config/aibot-autonomy-token-budget.json` across restarts; deleting it loses accounting.
+
+HTTP 429 honors `Retry-After` seconds or HTTP dates, with a 60-second fallback. The cooldown is shared and persisted. Exhausted quota waits until enough reservations expire; ordinary world physics continue while inference is deferred. Status reports remaining local budget and retry delay. Legacy manual Groq inference is disabled because it bypasses this ledger; use `/aibot autonomy start Bob`.
+
+This ledger accounts for this installation's requests. Other applications using the same Groq organization also consume its quota and may cause earlier 429 responses. A 200K budget can limit the number of decisions substantially; it does not guarantee continuous overnight inference. Groq documents organization-wide limits and retry headers in its [rate-limit guide](https://console.groq.com/docs/rate-limits).
+
 ## Commands
 
 ```text
@@ -218,7 +230,7 @@ Commands use the existing owner/operator authorization gate. Existing panel paus
 
 ## Known limits
 
-- Deterministic and world-backed tests are not evidence of good model judgment or overnight survival. A real hosted-model overnight run still needs validation; no provider credentials were supplied for that experiment.
+- Deterministic and world-backed tests are not evidence of good model judgment or overnight survival. A real hosted-model overnight run still needs validation.
 - Limited ray sampling can miss small/occluded surfaces. Navigation is local and conservative; complex jumps, caves, fluids, moving obstacles and long routes can fail. The model must choose follow-up actions.
 - Recipe identifiers are namespaced vanilla identifiers. No strategy-rich recipe discovery/acquisition catalogue is injected. Unsupported screen operations fail; unusual modded recipes/interfaces are unverified.
 - Memory is lossy by design. Journals rotate, and disk faults may produce explicitly recorded gaps. Snapshots recover ordinary saves, not every last event before a crash.

@@ -135,6 +135,14 @@ Added documentation/configuration: `.gitattributes`, `AUTONOMY.md`, `AUTONOMY_TO
 
 Other material changes: `.gitignore` (track autonomy docs, ignore local build logs), `README.md` (entry link), `gradle.properties` (artifact version), `src/gametest/resources/fabric.mod.json` (test entrypoints). Existing test assertions remain unchanged. `.gitattributes` makes Java checkouts use LF because inherited source-text tests assume that line ending.
 
+## Groq budget update: autonomy.3 (2026-09-15)
+
+- Scoped Gradle run passed all 48 autonomy tests and produced the remapped production jar. A separate legacy Groq guard test passed (49 tests total). No physical-action implementation changed, so the earlier world-backed suite was not repeated.
+- Six context tests cover bounded relevant observations, memory, recent events, target retention, and screen inventory deduplication.
+- Ten budget tests cover persistent reservations, settlement, rolling expiry, concurrent admission, malformed storage, and fail-closed behavior. Six provider/engine integration tests use loopback HTTP to verify pre-send reservation, actual usage refund, missing/malformed usage retention, shared admission and 429 cooldown, HTTP-date Retry-After, restart recovery, and overflow-safe deferral. The six integration tests passed again after adding recovery from an oversized request when configuration is corrected and the engine restarted.
+- Two live requests to `qwen/qwen3.8-27b` using synthetic empty observations and the 16-action schema returned HTTP 429, including one retry after the first cooldown. Both persisted conservative reservations and cooldowns. Successful Groq decision parsing and in-game behavior remain unverified.
+- Installed jar SHA-256: `a8c818bf7b34598931a620a150ca3e625052c6fa4fece34215c1638889365443`. The instance's old runtime and sources jars were moved to its backup folder, and the new jar's installed hash matched the build.
+
 ## Remaining deterministic choices and limitations
 
 A* costs, hazard exclusions, short-drop limits, steering and collision rules select the motor route to a model-selected destination. These are the closest remaining boundary between mechanics and policy: they can refuse hazardous routes. The model can request separate bounded movement. Recipe matching, screen transactions, reach checks, mining/attack timing, timeouts and retry limits also remain deterministic.

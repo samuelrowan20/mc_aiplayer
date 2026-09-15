@@ -31,6 +31,9 @@ public final class DeepSeekApiClient {
     }
 
     public ChatResponse chat(List<ChatMessage> history, List<ToolDefinition> tools) throws DeepSeekApiException {
+        if ("api.groq.com".equalsIgnoreCase(URI.create(config.baseUrl()).getHost())) {
+            throw new DeepSeekApiException("groq_requires_budgeted_autonomy: use /aibot autonomy start <bot>");
+        }
         if (config.apiKey() == null || config.apiKey().isBlank()) {
             throw new DeepSeekApiException("deepseek_api_key_missing");
         }

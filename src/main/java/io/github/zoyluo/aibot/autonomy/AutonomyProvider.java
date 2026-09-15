@@ -16,6 +16,9 @@ import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -23,6 +26,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Same chat-completions/function-call protocol as the manual brain, without strategic tools/history. */
@@ -55,11 +60,22 @@ public interface AutonomyProvider extends AutoCloseable {
     }
 
     CompletableFuture<Reply> decide(JsonObject context);
+    default String budgetStatus() { return "unlimited"; }
     @Override default void close() { }
+
+    final class Deferred extends RuntimeException {
+        private final Instant retryAt;
+        public Deferred(String code, Instant retryAt) { super(code); this.retryAt = retryAt; }
+        public Instant retryAt() { return retryAt; }
+    }
 
     /** Definitions contain name, description and parameters (JSON schema), supplied by the mechanical registry. */
     static AutonomyProvider openAi(Config config, JsonArray capabilities) {
-        return new OpenAi(config, capabilities);
+        return openAi(config, capabilities, null);
+    }
+
+    static AutonomyProvider openAi(Config config, JsonArray capabilities, AutonomyTokenBudget budget) {
+        return new OpenAi(config, capabilities, budget);
     }
 
     final class OpenAi implements AutonomyProvider {
@@ -68,24 +84,28 @@ public interface AutonomyProvider extends AutoCloseable {
         private final JsonObject tool;
         private final String prompt;
         private final HttpClient client;
+        private final AutonomyTokenBudget budget;
+        private final ExecutorService worker = Executors.newSingleThreadExecutor(task -> {
+            Thread thread = new Thread(task, "AIBotProvider");
+            thread.setDaemon(true);
+            return thread;
+        });
         private final AtomicReference<CompletableFuture<?>> active = new AtomicReference<>();
         private volatile boolean closed;
 
-        private OpenAi(Config config, JsonArray capabilities) {
+        private OpenAi(Config config, JsonArray capabilities, AutonomyTokenBudget budget) {
             this.config = config;
+            this.budget = budget;
             this.tool = decisionTool(capabilities);
-            this.prompt = DIRECTIVE + "\nYou choose all intentions and priorities. An intention can persist across actions. "
+            this.prompt = DIRECTIVE + "\nYou choose intentions and priorities; intentions can persist across actions. "
                     + (config.decisionFormat().equals("json_schema")
                         ? "Return one JSON decision matching the supplied response schema to continue, revise, abandon, complete, defer or replace your intention, "
                         : "Use decide once to continue, revise, abandon, complete, defer or replace your intention, ")
                     + "and select exactly one physical action or deliberateWait with a reason and bounded ticks. "
-                    + "The server runs at nominally 20 ticks per second. Actions report success or failure; "
-                    + "failure does not satisfy the action. Use observations and results to evaluate your next decision. "
-                    + "Observations describe your player and its visible surroundings, inventory, known positions, and current interface. "
-                    + "working_state contains your current intention, last result, recent episodes and failures. "
-                    + "memorySummary is your bounded durable summary; retain relevant earlier memories when updating it. "
-                    + "Supply a concise public purpose only. Do not provide private reasoning traces. "
-                    + "Capabilities and argument schemas: " + capabilities;
+                    + "20 ticks equal one second. Failed actions did not complete. Observations are local and partial; "
+                    + "omitted counts indicate withheld entries, not absent objects. working_state holds current intention, "
+                    + "latest result, recent events and summarized memory. Update memorySummary concisely, retaining needed memories. "
+                    + "Supply only a concise public purpose, never private reasoning.";
             this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         }
 
@@ -117,6 +137,10 @@ public interface AutonomyProvider extends AutoCloseable {
                 messages.add(message);
             }
             body.add("messages", messages);
+            if ("api.groq.com".equalsIgnoreCase(URI.create(config.baseUrl()).getHost())) {
+                body.addProperty("reasoning_format", "hidden");
+                body.addProperty("parallel_tool_calls", false);
+            }
             if (config.decisionFormat().equals("json_schema")) {
                 JsonObject format = new JsonObject();
                 format.addProperty("type", "json_schema");
@@ -159,21 +183,108 @@ public interface AutonomyProvider extends AutoCloseable {
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8));
             if (!config.apiKey().isBlank()) builder.header("Authorization", "Bearer " + config.apiKey());
-            long started = System.nanoTime();
-            var request = client.sendAsync(builder.build(), responseInfo -> new BoundedBody());
-            active.set(request);
-            var reply = request.thenApply(response -> {
-                if (response.statusCode() != 200) {
-                    throw new IllegalStateException("provider_http_" + response.statusCode());
-                }
-                return parse(response.body(), (System.nanoTime() - started) / 1_000_000, config.decisionFormat());
-            });
-            // HttpRequest.timeout may stop applying after headers arrive. Bound the entire body too.
+            var reply = new CompletableFuture<Reply>();
+            if (!active.compareAndSet(existing, reply)) {
+                return CompletableFuture.failedFuture(new IllegalStateException("provider_busy"));
+            }
+            AtomicReference<CompletableFuture<?>> transport = new AtomicReference<>();
             reply.orTimeout(config.timeoutSeconds(), TimeUnit.SECONDS);
             reply.whenComplete((result, failure) -> {
-                if (reply.isCancelled() || failure instanceof TimeoutException) request.cancel(true);
+                if (reply.isCancelled() || failure instanceof TimeoutException) {
+                    synchronized (transport) {
+                        var request = transport.get();
+                        if (request != null) request.cancel(true);
+                    }
+                }
             });
+            // Reserve durable quota off the server thread before any network request can start.
+            // Byte count overestimates byte-tokenized prompts; include all JSON/schema bytes,
+            // the maximum output, and a framing allowance. Unknown usage never refunds quota.
+            int reservationTokens = Math.addExact(body.toString().getBytes(StandardCharsets.UTF_8).length,
+                    config.maxTokens() + 512);
+            long started = System.nanoTime();
+            try {
+                worker.execute(() -> {
+                    try {
+                        if (reply.isDone()) return;
+                        var reservation = budget == null ? null : budget.reserve(reservationTokens);
+                        CompletableFuture<HttpResponse<String>> request;
+                        synchronized (transport) {
+                            if (reply.isDone() || closed) return;
+                            request = client.sendAsync(builder.build(), responseInfo -> new BoundedBody());
+                            transport.set(request);
+                        }
+                        request.whenCompleteAsync((response, failure) -> {
+                            try {
+                                if (failure != null) { reply.completeExceptionally(failure); return; }
+                                if (response.statusCode() == 429) {
+                                    Instant retryAt = retryAt(response);
+                                    if (budget != null) {
+                                        try { budget.deferUntil(retryAt); }
+                                        catch (IOException storageFailure) {
+                                            throw new Deferred("provider_http_429_budget_storage_failure", retryAt);
+                                        }
+                                    }
+                                    throw new Deferred("provider_http_429", retryAt);
+                                }
+                                if (response.statusCode() != 200) {
+                                    throw new IllegalStateException("provider_http_" + response.statusCode());
+                                }
+                                if (budget != null) {
+                                    // Charge successful HTTP responses even if their decision is invalid.
+                                    JsonObject root = JsonParser.parseString(response.body()).getAsJsonObject();
+                                    JsonObject usage = root.has("usage") && root.get("usage").isJsonObject()
+                                            ? root.getAsJsonObject("usage") : null;
+                                    int actual = -1;
+                                    if (usage != null && usage.has("prompt_tokens") && usage.has("completion_tokens")) {
+                                        try {
+                                            var promptValue = usage.get("prompt_tokens");
+                                            var completionValue = usage.get("completion_tokens");
+                                            if (promptValue.isJsonPrimitive() && promptValue.getAsJsonPrimitive().isNumber()
+                                                    && completionValue.isJsonPrimitive() && completionValue.getAsJsonPrimitive().isNumber()) {
+                                                int prompt = promptValue.getAsBigDecimal().intValueExact();
+                                                int completion = completionValue.getAsBigDecimal().intValueExact();
+                                                if (prompt >= 0 && completion >= 0) actual = Math.addExact(prompt, completion);
+                                            }
+                                        } catch (RuntimeException invalidUsage) { /* Retain the reservation. */ }
+                                    }
+                                    budget.settle(reservation, actual);
+                                }
+                                reply.complete(parse(response.body(), (System.nanoTime() - started) / 1_000_000,
+                                        config.decisionFormat()));
+                            } catch (Exception exception) {
+                                reply.completeExceptionally(exception);
+                            }
+                        }, worker);
+                    } catch (AutonomyTokenBudget.BudgetUnavailableException exception) {
+                        reply.completeExceptionally(new Deferred(exception.code(), exception.nextEligibleAt()));
+                    } catch (IOException exception) {
+                        reply.completeExceptionally(new IllegalStateException("token_budget_storage_failure"));
+                    } catch (RuntimeException exception) {
+                        reply.completeExceptionally(exception);
+                    }
+                });
+            } catch (RuntimeException exception) {
+                reply.completeExceptionally(exception);
+            }
             return reply;
+        }
+
+        private static Instant retryAt(HttpResponse<?> response) {
+            Instant now = Instant.now();
+            String value = response.headers().firstValue("retry-after").orElse("");
+            try { return now.plusMillis(Math.max(1000, (long) (Double.parseDouble(value) * 1000))); }
+            catch (RuntimeException ignored) {
+                try { return ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().isAfter(now)
+                        ? ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant() : now.plusSeconds(1); }
+                catch (RuntimeException invalid) { return now.plusSeconds(60); }
+            }
+        }
+
+        @Override public String budgetStatus() {
+            if (budget == null) return "unlimited";
+            var status = budget.cachedStatus();
+            return status == null ? "not_checked" : status.remainingTokens() + "/" + status.limitTokens() + " tokens remaining";
         }
 
         @Override public void close() {
@@ -181,6 +292,7 @@ public interface AutonomyProvider extends AutoCloseable {
             var request = active.getAndSet(null);
             if (request != null) request.cancel(true);
             client.shutdownNow();
+            worker.shutdownNow();
         }
 
         static Reply parse(String text, long latencyMillis) {
@@ -227,7 +339,15 @@ public interface AutonomyProvider extends AutoCloseable {
         }
 
         private static int tokens(JsonObject usage, String key) {
-            return usage.has(key) && !usage.get(key).isJsonNull() ? Math.max(0, usage.get(key).getAsInt()) : 0;
+            try {
+                if (usage.has(key) && usage.get(key).isJsonPrimitive()
+                        && usage.getAsJsonPrimitive(key).isNumber()) {
+                    return Math.max(0, usage.get(key).getAsBigDecimal().intValueExact());
+                }
+            } catch (RuntimeException ignored) {
+                // Usage metadata must not discard an otherwise valid decision.
+            }
+            return 0;
         }
 
         private static JsonObject decisionTool(JsonArray capabilities) {
@@ -252,6 +372,7 @@ public interface AutonomyProvider extends AutoCloseable {
                         "maxTicks":{"type":"integer","minimum":1,"maximum":600}}}
                         """).getAsJsonObject();
                 JsonObject properties = variant.getAsJsonObject("properties");
+                variant.addProperty("description", capability.get("description").getAsString());
                 properties.getAsJsonObject("name").getAsJsonArray("enum").add(capability.get("name").getAsString());
                 properties.add("arguments", capability.get("parameters").deepCopy());
                 variants.add(variant);

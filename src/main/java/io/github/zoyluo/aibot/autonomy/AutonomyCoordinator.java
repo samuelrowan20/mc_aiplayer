@@ -30,6 +30,7 @@ public final class AutonomyCoordinator {
     private final Map<UUID, Session> sessions = new HashMap<>();
     private AutonomySettings settings = AutonomySettings.defaults();
     private AutonomyProvider.Config providerConfig;
+    private AutonomyTokenBudget tokenBudget;
     private Path journalRoot;
 
     private AutonomyCoordinator() { }
@@ -39,6 +40,7 @@ public final class AutonomyCoordinator {
         JsonObject options = GSON.toJsonTree(AutonomySettings.defaults()).getAsJsonObject();
         options.addProperty("reasoningMode", "none");
         options.addProperty("decisionFormat", "tool_call");
+        options.addProperty("dailyTokenLimit", 0);
         Path path = FabricLoader.getInstance().getConfigDir().resolve("aibot-autonomy.json");
         try {
             if (Files.exists(path)) {
@@ -58,6 +60,11 @@ public final class AutonomyCoordinator {
                     options.get("reasoningMode").getAsString(),
                     options.has("reasoningEffort") ? options.get("reasoningEffort").getAsString() : llm.reasoningEffort(),
                     options.get("decisionFormat").getAsString());
+            int dailyLimit = options.get("dailyTokenLimit").getAsInt();
+            if ("api.groq.com".equalsIgnoreCase(java.net.URI.create(llm.baseUrl()).getHost()))
+                dailyLimit = dailyLimit <= 0 ? 200000 : Math.min(200000, dailyLimit);
+            tokenBudget = dailyLimit > 0 ? new AutonomyTokenBudget(
+                    path.resolveSibling("aibot-autonomy-token-budget.json"), dailyLimit) : null;
         } catch (IOException | RuntimeException exception) {
             providerConfig = null;
             AIBotMod.LOGGER.error("Autonomy configuration invalid; fix aibot-autonomy.json and restart ({})",
@@ -126,6 +133,8 @@ public final class AutonomyCoordinator {
                 ", action=" + (state.action() == null ? "none" : state.action().name()) +
                 ", wait=" + (state.purposefulWait() == null ? "none" : state.purposefulWait().reason()) +
                 ", provider_failures=" + state.providerFailures() +
+                ", retry_seconds=" + state.retryRemainingTicks() / 20 +
+                ", budget=" + session.provider.budgetStatus() +
                 ", journal_dropped=" + session.journal.droppedEvents() +
                 ", journal_error=" + session.journal.lastError();
     }
@@ -227,6 +236,7 @@ public final class AutonomyCoordinator {
         final AutonomyEmbodiment embodiment;
         final AutonomyEngine engine;
         final AutonomyJournal journal;
+        final AutonomyProvider provider;
         int deadTicks;
         float lastHealth;
 
@@ -235,10 +245,10 @@ public final class AutonomyCoordinator {
             lastHealth = bot.getHealth();
             embodiment = new AutonomyEmbodiment(() -> this.bot);
             journal = new AutonomyJournal(journalRoot, bot.getUuid().toString(), settings);
-            AutonomyProvider provider = override != null ? override : providerConfig == null
+            provider = override != null ? override : providerConfig == null
                     ? context -> java.util.concurrent.CompletableFuture.failedFuture(
                             new IllegalStateException("invalid_provider_configuration"))
-                    : AutonomyProvider.openAi(providerConfig, AutonomyEmbodiment.capabilities());
+                    : AutonomyProvider.openAi(providerConfig, AutonomyEmbodiment.capabilities(), tokenBudget);
             engine = new AutonomyEngine(settings, provider, embodiment, event -> {
                 JsonObject details = event.details().deepCopy();
                 details.addProperty("bot", this.bot.getGameProfile().getName());
